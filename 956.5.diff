@@ -1,0 +1,2472 @@
+diff --git wpsc-admin/admin.php wpsc-admin/admin.php
+index 8261192..a91acba 100644
+--- wpsc-admin/admin.php
++++ wpsc-admin/admin.php
+@@ -401,7 +401,8 @@ function wpsc_meta_boxes() {
+ 	add_meta_box( 'wpsc_additional_desc', __('Additional Description', 'wpsc'), 'wpsc_additional_desc', $pagename, 'normal', 'high' );
+ 	add_meta_box( 'wpsc_product_download_forms', __('Product Download', 'wpsc'), 'wpsc_product_download_forms', $pagename, 'normal', 'high' );
+ 	add_meta_box( 'wpsc_product_image_forms', __('Product Images', 'wpsc'), 'wpsc_product_image_forms', $pagename, 'normal', 'high' );
+-	add_meta_box( 'wpsc_product_shipping_forms', __('Shipping', 'wpsc'), 'wpsc_product_shipping_forms', $pagename, 'normal', 'high' );
++	if ( ! empty( $post->ID ) && ! wpsc_product_has_variations( $post->ID ) )
++		add_meta_box( 'wpsc_product_shipping_forms', __('Shipping', 'wpsc'), 'wpsc_product_shipping_forms_metabox', $pagename, 'normal', 'high' );
+ 	add_meta_box( 'wpsc_product_advanced_forms', __('Advanced Settings', 'wpsc'), 'wpsc_product_advanced_forms', $pagename, 'normal', 'high' );
+ 
+ }
+@@ -409,7 +410,7 @@ function wpsc_meta_boxes() {
+ add_action( 'admin_footer', 'wpsc_meta_boxes' );
+ add_action( 'admin_enqueue_scripts', 'wpsc_admin_include_css_and_js_refac' );
+ function wpsc_admin_include_css_and_js_refac( $pagehook ) {
+-	global $post_type, $current_screen;
++	global $post_type, $current_screen, $post;
+ 
+ 	if ( version_compare( get_bloginfo( 'version' ), '3.3', '<' ) )
+ 		wp_admin_css( 'dashboard' );
+@@ -430,7 +431,7 @@ function wpsc_admin_include_css_and_js_refac( $pagehook ) {
+ 	$version_identifier = WPSC_VERSION . "." . WPSC_MINOR_VERSION;
+ 	$pages = array( 'index.php', 'options-general.php', 'edit.php', 'post.php', 'post-new.php' );
+ 
+-	if ( ( in_array( $pagehook, $pages ) && $post_type == 'wpsc-product' )  || $current_screen->id == 'edit-wpsc_product_category' || $current_screen->id == 'dashboard_page_wpsc-sales-logs' || $current_screen->id == 'dashboard_page_wpsc-purchase-logs' || $current_screen->id == 'settings_page_wpsc-settings' || $current_screen->id == 'wpsc-product_page_wpsc-edit-coupons' || $current_screen->id == 'edit-wpsc-variation' ) {
++	if ( ( in_array( $pagehook, $pages ) && $post_type == 'wpsc-product' )  || $current_screen->id == 'edit-wpsc_product_category' || $current_screen->id == 'dashboard_page_wpsc-sales-logs' || $current_screen->id == 'dashboard_page_wpsc-purchase-logs' || $current_screen->id == 'settings_page_wpsc-settings' || $current_screen->id == 'wpsc-product_page_wpsc-edit-coupons' || $current_screen->id == 'edit-wpsc-variation' || $current_screen->id == 'wpsc-product-variations-iframe' ) {
+ 		wp_enqueue_script( 'livequery',                      WPSC_URL . '/wpsc-admin/js/jquery.livequery.js',             array( 'jquery' ), '1.0.3' );
+ 		wp_enqueue_script( 'wp-e-commerce-admin-parameters', admin_url( 'admin.php?wpsc_admin_dynamic_js=true' ), false,             $version_identifier );
+ 		wp_enqueue_script( 'wp-e-commerce-admin',            WPSC_URL . '/wpsc-admin/js/admin.js',                        array( 'jquery', 'jquery-ui-core', 'jquery-ui-sortable' ), $version_identifier, false );
+@@ -446,6 +447,7 @@ function wpsc_admin_include_css_and_js_refac( $pagehook ) {
+ 				array(                       // args
+ 					'add_variation_set_nonce' => _wpsc_create_ajax_nonce( 'add_variation_set' ),
+ 					'update_variations_nonce' => _wpsc_create_ajax_nonce( 'update_variations' ),
++					'thickbox_title'          => __( 'Add Media - %s', 'wpsc' ),
+ 				)
+ 			);
+ 		}
+@@ -458,6 +460,25 @@ function wpsc_admin_include_css_and_js_refac( $pagehook ) {
+ 				'l10n_print_after' => 'try{convertEntities(wpsc_adminL10n);}catch(e){};'
+ 			) );
+ 	}
++
++	if ( $pagehook == 'wpsc-product-variations-iframe' ) {
++		wp_enqueue_script( 'wp-e-commerce-product-variations', WPSC_URL . '/wpsc-admin/js/product-variations.js', array( 'jquery' ), $version_identifier );
++		wp_localize_script( 'wp-e-commerce-product-variations', 'WPSC_Product_Variations', array(
++			'product_id' => $_REQUEST['product_id'],
++		) );
++	}
++
++	if ( $pagehook == 'media-upload-popup' ) {
++		wp_dequeue_script( 'set-post-thumbnail' );
++		wp_enqueue_script( 'wpsc-set-post-thumbnail', WPSC_URL . '/wpsc-admin/js/set-post-thumbnail.js', array( 'jquery' ), $version_identifier );
++		wp_localize_script( 'wpsc-set-post-thumbnail', 'WPSC_Set_Post_Thumbnail', array(
++			'link_text' => __( 'Use as Product Thumbnail', 'wpsc' ),
++			'saving'    => __( 'Saving...' ),
++			'error'     => __( 'Could not set that as the thumbnail image. Try a different attachment.' ),
++			'done'      => __( 'Done' ),
++		) );
++	}
++
+ 	if ( 'dashboard_page_wpsc-upgrades' == $pagehook || 'dashboard_page_wpsc-update' == $pagehook )
+ 		wp_enqueue_style( 'wp-e-commerce-admin', WPSC_URL . '/wpsc-admin/css/admin.css', false, $version_identifier, 'all' );
+ }
+diff --git wpsc-admin/ajax.php wpsc-admin/ajax.php
+index 4a02ec4..7d089c2 100644
+--- wpsc-admin/ajax.php
++++ wpsc-admin/ajax.php
+@@ -80,6 +80,15 @@ function _wpsc_ajax_handler() {
+ }
+ add_action( 'wp_ajax_wpsc_ajax', '_wpsc_ajax_handler' );
+ 
++function wpsc_is_doing_ajax( $action = '' ) {
++	$ajax = defined( 'DOING_AJAX' ) && DOING_AJAX && ! empty( $_REQUEST['action'] ) && $_REQUEST['action'] == 'wpsc_ajax';
++
++	if ( $action )
++		$ajax = $ajax && ! empty( $_REQUEST['wpsc_action'] ) && $ajax_action == str_replace( '-', '_', $_REQUEST['wpsc_action'] );
++
++	return $ajax;
++}
++
+ /**
+  * Helper function that generates nonce for an AJAX action. Basically just a wrapper of
+  * wp_create_nonce() but automatically add prefix.
+@@ -554,7 +563,7 @@ function _wpsc_ajax_upload_product_file() {
+  * @return array|WP_Error Response args if successful, WP_Error if otherwise
+  */
+ function _wpsc_ajax_update_variations() {
+-	$product_id = absint( $_POST["product_id"] );
++	$product_id = absint( $_REQUEST["product_id"] );
+ 	wpsc_update_variations();
+ 
+ 	ob_start();
+@@ -574,4 +583,41 @@ function _wpsc_action_tinymce_window() {
+ 	require_once( WPSC_CORE_JS_PATH . '/tinymce3/window.php' );
+ 	exit;
+ }
+-add_action( 'wp_ajax_wpsc_tinymce_window', '_wpsc_action_tinymce_window' );
+\ No newline at end of file
++add_action( 'wp_ajax_wpsc_tinymce_window', '_wpsc_action_tinymce_window' );
++
++function wpsc_product_variations_table() {
++	check_admin_referer( 'wpsc_product_variations_table' );
++	require_once( WPSC_FILE_PATH . '/wpsc-admin/includes/product-variations-page.class.php' );
++	$page = new WPSC_Product_Variations_Page();
++	$page->display();
++
++	exit;
++}
++add_action( 'wp_ajax_wpsc_product_variations_table', 'wpsc_product_variations_table' );
++
++function _wpsc_ajax_set_variation_product_thumbnail() {
++	$response = array(
++		'success' => false
++	);
++
++	$post_ID = intval( $_POST['post_id'] );
++	if ( current_user_can( 'edit_post', $post_ID ) ) {
++		$thumbnail_id = intval( $_POST['thumbnail_id'] );
++		check_ajax_referer( "set_post_thumbnail-$post_ID" );
++
++		if ( $thumbnail_id == '-1' )
++			delete_post_thumbnail( $post_ID );
++
++		set_post_thumbnail( $post_ID, $thumbnail_id );
++
++		$thumbnail = wpsc_the_product_thumbnail( 50, 50, $post_ID, '' );
++		if ( ! $thumbnail )
++			$thumbnail = WPSC_CORE_IMAGES_URL . '/no-image-uploaded.gif';
++		$response['src'] = $thumbnail;
++		$response['success'] = true;
++	}
++
++	echo json_encode( $response );
++	exit;
++}
++add_action( 'wp_ajax_wpsc_set_variation_product_thumbnail', '_wpsc_ajax_set_variation_product_thumbnail' );
+\ No newline at end of file
+diff --git wpsc-admin/css/admin.css wpsc-admin/css/admin.css
+index e81b5d4..cb953f6 100644
+--- wpsc-admin/css/admin.css
++++ wpsc-admin/css/admin.css
+@@ -1987,4 +1987,186 @@ table.purchase-logs .column-id .delete {
+ 
+ table.purchase-logs tr:hover .column-id .delete {
+ 	visibility:visible;
++}
++
++/* Product Variations */
++.no-js #wpsc_product_variation_forms iframe {
++	height:300px;
++}
++
++.js #wpsc_product_variation_forms iframe {
++	border:0;
++	margin:0;
++	overflow:hidden;
++	padding:0;
++}
++
++#wpsc_product_variation_forms iframe {
++	background:transparent;
++	width:100%;
++}
++
++#wpsc-product-variations-wrapper .tablenav.top {
++	margin-top:0;
++}
++
++.wpsc-save-variations-top {
++	float:right;
++	margin:8px 0 5px;
++}
++
++#wpsc-product-variations-wrapper .column-stock input[type="text"],
++#wpsc-product-variations-wrapper .column-tax input[type="text"],
++#wpsc-product-variations-wrapper .column-price input[type="text"],
++#wpsc-product-variations-wrapper .column-sale_price input[type="text"],
++#wpsc-product-variations-wrapper .column-sku input[type="text"] {
++	width:100%;
++
++	box-sizing:border-box;
++	-o-box-sizing:border-box;
++	-moz-box-sizing:border-box;
++	-webkit-box-sizing:border-box;
++}
++
++#wpsc-product-variations-wrapper .inline-edit-row.column-stock input[type="text"],
++#wpsc-product-variations-wrapper .inline-edit-row.column-tax input[type="text"],
++#wpsc-product-variations-wrapper .inline-edit-row.column-price input[type="text"],
++#wpsc-product-variations-wrapper .inline-edit-row.column-sale_price input[type="text"],
++#wpsc-product-variations-wrapper .inline-edit-row.column-sku input[type="text"] {
++	width: 60%;
++}
++
++#wpsc-product-variations-wrapper .column-stock, #wpsc-product-variations-wrapper .column-tax, #wpsc-product-variations-wrapper .column-price, #wpsc-product-variations-wrapper .column-sale_price, #wpsc-product-variations-wrapper .column-sku {
++	text-align:center;
++	width:11%;
++}
++
++#wpsc-product-variations-wrapper .column-stock input,
++#wpsc-product-variations-wrapper .column-tax input,
++#wpsc-product-variations-wrapper .column-price input,
++#wpsc-product-variations-wrapper .column-sale_price input,
++#wpsc-product-variations-wrapper .column-sku input {
++	text-align:right;
++}
++
++.js #wpsc-product-variations-wrapper tbody .active td, .js #wpsc-product-variations-wrapper tbody .active th {
++	border-bottom-style:dashed;
++}
++
++.js #wpsc-product-variations-wrapper tbody td, .js #wpsc-product-variations-wrapper tbody th {
++	border-bottom-style:solid;
++}
++
++#wpsc-product-variations-wrapper div.updated,
++#wpsc-product-variations-wrapper div.error {
++	margin: 15px 0 2px;
++}
++
++.js #wpsc-product-variations-wrapper .wpsc-stock-editor-row {
++	display:none;
++}
++
++#wpsc-product-variations-wrapper .wpsc-stock-editor-row td {
++	border-bottom-style:solid;
++}
++
++#wpsc-product-variations-wrapper .submit {
++	margin:0;
++	padding:0;
++}
++
++.wpsc-stock-editor .inside {
++	overflow:hidden;
++}
++
++.wpsc-stock-editor .wpsc-product-shipping-section {
++	display:inline-block;
++	vertical-align: top;
++	width:49%;
++}
++
++.wpsc-stock-editor .wpsc-form-field {
++	clear:both;
++}
++
++.wpsc-stock-editor .wpsc-product-shipping-section input[type="text"] {
++	text-align:right;
++	width:50px;
++}
++
++.wpsc-product-shipping-weight-dimensions label {
++	display:inline-block;
++	min-width:60px;
++}
++
++.wpsc-product-shipping-flat-rate label {
++	display:inline-block;
++	min-width:160px;
++}
++
++.wpsc-stock-editor {
++	overflow:hidden;
++}
++
++.wpsc-stock-editor select {
++	min-width:100px;
++}
++
++#wpsc_product_variation_forms .inside {
++	background: #fff;
++	padding: 0;
++	margin: 0;
++}
++
++.wpsc-product-variations-tabs {
++	background: #F1F1F1;
++	border-bottom: 1px solid #ccc;
++	padding: 10px 10px 0;
++	margin: 0;
++}
++
++.wpsc-product-variations-tabs li {
++	display: inline-block;
++	margin: 0 4px 2px 0;
++}
++
++.wpsc-product-variations-tabs a {
++	background-color: #fff;
++	border-color: #ccc #ccc #fff;
++	border-style: solid;
++	border-width: 1px 1px 0;
++	color: #aaa;
++	padding: 5px 7px 3px;
++	text-decoration: none;
++
++	border-top-left-radius: 3px;
++	border-top-right-radius: 3px;
++	-webkit-border-top-left-radius: 3px;
++	-webkit-border-top-right-radius: 3px;
++	-moz-border-top-left-radius: 3px;
++	-moz-border-top-right-radius: 3px;
++}
++
++.wpsc-product-variations-tabs a:hover {
++	color: #D54E21;
++}
++
++.wpsc-product-variations-tabs .active a {
++	border-bottom-width: 1px;
++	color: #333;
++	margin-bottom: 2px;
++}
++
++.wpsc-product-variations-tab-content {
++	padding: 0 10px;
++}
++
++.wpsc-product-variation-thumbnail {
++	float: left;
++	height: 50px;
++	width: 50px;
++}
++
++.wpsc-product-variation-title {
++	margin-left: 60px;
+ }
+\ No newline at end of file
+diff --git wpsc-admin/display-items.page.php wpsc-admin/display-items.page.php
+index cb1d0c6..d4a3013 100755
+--- wpsc-admin/display-items.page.php
++++ wpsc-admin/display-items.page.php
+@@ -47,25 +47,7 @@ function wpsc_additional_sortable_column_names( $columns ){
+ 
+     return $columns;
+ }
+-function wpsc_additional_column_name_variations( $columns ){
+-    global $post;
+-
+-    if(isset($post) && $post->post_parent != '0' )
+-       remove_meta_box( 'wpsc_product_variation_forms', 'wpsc-product', 'normal' );
+-
+-    $columns['image'] = '';
+-    $columns['title'] = __('Name', 'wpsc');
+-    $columns['weight'] = __('Weight', 'wpsc');
+-    $columns['stock'] = __('Stock', 'wpsc');
+-    $columns['price'] = __('Price', 'wpsc');
+-    $columns['sale_price'] = __('Sale Price', 'wpsc');
+-    $columns['SKU'] = __('SKU', 'wpsc');
+-    $columns['hidden_alerts'] = '';
+ 
+-    //For BC for 3.0 (hoping to remove for WPEC 3.9)
+-    register_column_headers( 'wpsc-product_variants', $columns );
+-    return apply_filters( 'wpsc_variation_column_headers', $columns);
+-}
+ 
+ /**
+  * wpsc_additional_column_data.
+@@ -343,7 +325,6 @@ function wpsc_sortable_column_load() {
+ }
+ 
+ add_action( 'load-edit.php', 'wpsc_sortable_column_load' );
+-add_action( 'admin_head', 'wpsc_additional_column_name_variations' );
+ add_action( 'restrict_manage_posts', 'wpsc_cats_restrict_manage_posts' );
+ add_action( 'manage_pages_custom_column', 'wpsc_additional_column_data', 10, 2 );
+ add_filter( 'manage_edit-wpsc-product_sortable_columns', 'wpsc_additional_sortable_column_names' );
+diff --git wpsc-admin/includes/display-items-functions.php wpsc-admin/includes/display-items-functions.php
+index e52c344..795fb66 100644
+--- wpsc-admin/includes/display-items-functions.php
++++ wpsc-admin/includes/display-items-functions.php
+@@ -385,263 +385,165 @@ function wpsc_product_taxes_forms() {
+ }
+ 
+ function wpsc_product_variation_forms() {
+-	require_once( 'walker-variation-checklist.php' );
+-	global $post, $wpdb, $wp_query, $variations_processor, $wpsc_product_defaults;
+-
+-	$db_version = get_option( 'db_version' );
+-
+-	$product_data = get_post_custom( $post->ID );
+-	$product_data['meta'] = maybe_unserialize( $product_data );
+-
+-	foreach ( $product_data['meta'] as $meta_key => $meta_value )
+-		$product_data['meta'][$meta_key] = $meta_value[0];
+-
+-	$product_meta = array();
+-	if ( !empty( $product_data["_wpsc_product_metadata"] ) )
+-		$product_meta = maybe_unserialize( $product_data["_wpsc_product_metadata"][0] );
+-
+-	$siteurl = get_option( 'siteurl' );
+-	$output  = '';
+-?>
+-	<a name="#wpsc_variation_metabox"></a>
+-		<?php if ( empty( $post->post_title ) ) : ?>
+-			<p><?php _e( 'You must first save this Product as a Draft before adding variations.', 'wpsc' ); ?></p>
+-			<h4><a href="<?php echo get_admin_url(); ?>/edit-tags.php?taxonomy=wpsc-variation&post_type=wpsc-product" target="_blank">+ Add New Variation Set</a></h4>
+-		<?php else : ?>
+-			<div id="product_variations">
+-				<p><a name='variation_control'>&nbsp;</a><?php _e( 'Select the Variation sets and then the corresponding Variants you want to add to this product.', 'wpsc' ) ?></p>
+-
+-				<ul class="variation_checkboxes">
+-					<?php
+-
+-					wp_terms_checklist( $post->ID, array(
+-						'taxonomy'      => 'wpsc-variation',
+-						'walker'        => new WPSC_Walker_Variation_Checklist(),
+-						'checked_ontop' => false,
+-					) );
+-
+-					?>
+-				</ul>
+-
+-				<p class="update-variations">
+-					<a class="button update_variations_action" href='#'><?php _e( 'Apply Variations &rarr;', 'wpsc' ); ?></a>
+-					<img src="<?php echo esc_url( admin_url( 'images/wpspin_light.gif' ) ); ?>" class="ajax-feedback" title="" alt="" /><br class="clear" />
+-				</p>
+-
+-				<div class="clear"></div>
+-				<h4><a href="#wpsc_variation_metabox" class="add_variation_set_action"><?php esc_html_e( '+ Add New Variants', 'wpsc' ) ?></a></h4>
+-
+-				<div id="add-new-variation-set">
+-					<p>
+-						<label for="new-variation-set-name"><?php esc_html_e( "Enter variation set's name", 'wpsc' ); ?></label>
+-						<input type="text" class="text-field" id="new-variation-set-name" /><br />
+-					</p>
+-					<p class="howto"><?php esc_html_e( "Example: Color. If you want to add variants to an existing set, you can enter the name of that set here.", 'wpsc' ); ?></p>
+-					<p>
+-						<label for="new-variants"><?php esc_html_e( "Enter new variants", 'wpsc' ); ?></label>
+-						<input type="text" class="text-field" id="new-variants" /><br />
+-					</p>
+-					<p class="howto"><?php esc_html_e( "Example: Red, Green, Blue. Separate variants with commas.", 'wpsc' ); ?></p>
+-					<p>
+-						<a class="button" href="#"><?php esc_html_e( 'Add New Variants', 'wpsc' ); ?></a>
+-						<img src="<?php echo esc_url( admin_url( 'images/wpspin_light.gif' ) ); ?>" class="ajax-feedback" title="" alt="" /><br class="clear" />
+-					</p>
+-				</div>
+-			</div>
++	?>
++	<iframe src="<?php echo _wpsc_get_product_variation_form_url(); ?>"></iframe>
+ 	<?php
+-	$parent_product = $post->ID;
+-
+-	$query = array(
+-		'post_type'   => 'wpsc-product',
+-		'orderby'     => 'menu_order post_title',
+-		'post_parent' => $parent_product,
+-		'post_status' => 'publish, inherit',
+-		'order'       => 'ASC'
+-	);
+-
+-	$args = array(
+-		'post_type'   => 'attachment',
+-		'numberposts' => 1,
+-		'post_status' => null,
+-		'post_parent' => $parent_product,
+-		'orderby'     => 'menu_order',
+-		'order'       => 'ASC'
+-	);
+-
+-	$image_data                   = (array)get_posts( $args );
+-	$parent_product_data['image'] = array_shift( $image_data );
+-
+-	if ( !isset( $parent_product_data ) )
+-		$parent_product_data = null;
+-?>
+-			<table class="widefat page" id='wpsc_product_list' cellspacing="0">
+-				<thead>
+-					<tr>
+-						<?php print_column_headers( 'wpsc-product_variants' ); ?>
+-					</tr>
+-				</thead>
+-
+-				<tfoot>
+-					<tr>
+-						<?php print_column_headers( 'wpsc-product_variants', false ); ?>
+-					</tr>
+-				</tfoot>
+-
+-				<tbody>
+-				<?php
+-					wpsc_admin_product_listing( $parent_product_data, $query );
+-				?>
+-				</tbody>
+-
+-			</table>
+-
+-        <?php
+-	endif;
+-
+-	// reset the global $id variable. This is to prevent incompatibility with Genesis framework,
+-	// which (wrongly) relies on this global.
+-	$GLOBALS['id'] = null;
+ }
+-function wpsc_product_shipping_forms() {
+-	global $post, $wpdb, $variations_processor, $wpsc_product_defaults;
+ 
+-	$product_data = get_post_custom( $post->ID );
+-	$product_data['meta'] = maybe_unserialize( $product_data );
++function _wpsc_get_product_variation_form_url( $id = false ) {
++	if ( ! $id )
++		$id = get_the_ID();
++	return admin_url( 'admin-ajax.php?action=wpsc_product_variations_table&product_id=' . $id . '&_wpnonce=' . wp_create_nonce( 'wpsc_product_variations_table' ) );
++}
+ 
+-	foreach ( $product_data['meta'] as $meta_key => $meta_value )
+-		$product_data['meta'][$meta_key] = $meta_value[0];
++function wpsc_product_shipping_forms_metabox() {
++	wpsc_product_shipping_forms();
++}
+ 
+-	$product_meta = array();
+-	if ( !empty( $product_data["_wpsc_product_metadata"] ) )
+-		$product_meta = maybe_unserialize( $product_data["_wpsc_product_metadata"][0] );
++function wpsc_product_shipping_forms( $product = false, $field_name_prefix = 'meta[_wpsc_product_metadata]', $bulk = false ) {
++	if ( ! $product )
++		$product_id = get_the_ID();
++	else
++		$product_id = $product->ID;
++
++	$meta = get_post_meta( $product_id, '_wpsc_product_metadata', true );
++	$defaults = array(
++		'weight' => '',
++		'weight_unit' => '',
++		'dimensions' => array(),
++		'shipping'   => array(),
++		'no_shipping' => '',
++		'display_weight_as' => '',
++	);
++	$dimensions_defaults = array(
++		'height_unit' => '',
++		'width_unit' => '',
++		'length_unit' => '',
++		'height' => 0,
++		'width' => 0,
++		'length' => 0,
++	);
++	$shipping_defaults = array(
++		'local' => '',
++		'international' => '',
++	);
++	$meta = array_merge( $defaults, $meta );
++	$meta['dimensions'] = array_merge( $dimensions_defaults, $meta['dimensions'] );
++	$meta['shipping'] = array_merge( $shipping_defaults, $meta['shipping'] );
+ 
+-	$product_data['transformed'] = array();
+-	if ( !isset( $product_meta['weight'] ) )
+-		$product_meta['weight'] = "";
++	extract( $meta, EXTR_SKIP );
+ 
+-	if( !isset( $product_meta['weight_unit'] ) )
+-		$product_meta['weight_unit'] = '';
++	foreach ( $shipping as $key => &$val ) {
++		$val = number_format( (float) $val, 2 );
++  	}
+ 
+-	$product_data['transformed']['weight'] = wpsc_convert_weight( $product_meta['weight'], "pound", $product_meta['weight_unit']);
++	$weight = wpsc_convert_weight( $weight, 'pound', $weight_unit );
+ 
+-	// Fix wp_debug notices
+-	if(!isset($product_meta['dimensions'])){
+-		$product_meta['dimensions'] = array(
+-			'height' => 0,
+-			'width' => 0,
+-			'length' => 0
+-		);
+-	}
+-	if( !isset($product_meta['display_weight_as']) )
+-		$product_meta['display_weight_as'] = '';
++	$dimension_units = array(
++		'in'    => __( 'inches', 'wpsc' ),
++		'cm'    => __( 'cm', 'wpsc' ),
++		'meter' => __( 'meters', 'wpsc' )
++	);
+ 
+-	if( !isset(	$product_meta['dimensions']['height_unit'] ) )
+-		$product_meta['dimensions']['height_unit'] = '';
++	$weight_units = array(
++		'pound'    => __( 'pounds', 'wpsc' ),
++		'ounce'    => __( 'ounces', 'wpsc' ),
++		'gram'     => __( 'grams', 'wpsc' ),
++		'kilogram' => __( 'kilograms', 'wpsc' )
++	);
+ 
+-	if( !isset(	$product_meta['dimensions']['width_unit'] ) )
+-		$product_meta['dimensions']['width_unit'] = '';
++	$measurements = $dimensions;
++	$measurements['weight'] = $weight;
++	$measurements['weight_unit'] = $weight_unit;
+ 
+-	if( !isset(	$product_meta['dimensions']['length_unit'] ) )
+-		$product_meta['dimensions']['length_unit'] = '';
++	$measurement_fields = array(
++		array(
++			'name'   => 'weight',
++			'prefix' => '',
++			'label'  => __( 'Weight', 'wpsc' ),
++			'value'  => $weight,
++			'units'  => $weight_units,
++		),
++		array(
++			'name'   => 'height',
++			'prefix' => '[dimensions]',
++			'label'  => __( 'Height', 'wpsc' ),
++			'value'  => $dimensions['height'],
++			'units'  => $dimension_units,
++		),
++		array(
++			'name'   => 'width',
++			'prefix' => '[dimensions]',
++			'label'  => __( 'Width', 'wpsc' ),
++			'value'  => $dimensions['width'],
++			'units'  => $dimension_units,
++		),
++		array(
++			'name'   => 'length',
++			'prefix' => '[dimensions]',
++			'label'  => __( 'Length', 'wpsc' ),
++			'value'  => $dimensions['length'],
++			'units'  => $dimension_units,
++		),
++	);
++	$tabindex = 106;
++	if ( isset( $product->index ) )
++		$tabindex += $product->index * 20;
++?>
++	<div class="wpsc-stock-editor<?php if ( $bulk ) echo ' wpsc-bulk-edit' ?>">
++		<p class="wpsc-form-field">
++				<label><?php esc_html_e( 'Disregard Shipping for this Product', 'wpsc' ); ?></label>&nbsp;&nbsp;
++				<label><input tabindex="<?php echo $tabindex; ?>" type="radio" name="<?php echo $field_name_prefix ?>[no_shipping]" value="1" <?php checked( $no_shipping && ! $bulk ); ?> /> <?php echo esc_html_x( 'Yes', 'disregard shipping', 'wpsc' ); ?></label>&nbsp;&nbsp;
++				<label><input tabindex="<?php echo $tabindex + 1; ?>" type="radio" name="<?php echo $field_name_prefix ?>[no_shipping]" value="0" <?php checked( ! $no_shipping && ! $bulk ); ?> /> <?php echo esc_html_x( 'No', 'disregard shipping', 'wpsc' ); ?></label>&nbsp;&nbsp;
++		</p>
++
++		<div class="wpsc-product-shipping-section wpsc-product-shipping-weight-dimensions">
++			<p><strong><?php esc_html_e( 'Weight and Dimensions', 'wpsc' ); ?></strong></p>
++			<?php
++				foreach ( $measurement_fields as $field ):
++					$tabindex += 2;
++			?>
++				<p class="wpsc-form-field">
++					<?php if ( $bulk ): ?>
++						<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][measurements][<?php echo $field['name'] ?>]" value="1" />
++					<?php endif ?>
++					<label for="wpsc-product-shipping-<?php echo $field['name']; ?>"><?php echo esc_html( $field['label'] ); ?></label>
++					<span class="wpsc-product-shipping-input">
++						<input tabindex="<?php echo $tabindex; ?>" type="text" id="wpsc-product-shipping-<?php echo $field['name']; ?>" name="<?php echo $field_name_prefix . $field['prefix'] . '[' . $field['name'] . ']'; ?>" value="<?php if ( ! $bulk ) echo esc_attr( $field['value'] ); ?>" />
++						<select tabindex="<?php echo $tabindex + 1; ?>" name="<?php echo $field_name_prefix . $field['prefix'] . '[' . $field['name'] . '_unit]'; ?>">
++							<?php foreach ( $field['units'] as $unit => $unit_label ): ?>
++								<option value="<?php echo $unit; ?>" <?php if ( ! $bulk ) selected( $unit, $measurements[$field['name'] . '_unit'] ); ?>><?php echo esc_html( $unit_label ); ?></option>
++							<?php endforeach; ?>
++						</select>
++					</span>
++				</p>
++			<?php
++				endforeach;
++				$tabindex += 2;
++				 ?>
++		</div>
+ 
+-	if( !isset(	$product_meta['shipping'] ) ){
+-		$product_meta['shipping']['local'] = '';
+-		$product_meta['shipping']['international'] = '';
+-	}
+-	if( !isset( $product_meta['no_shipping'] ) )
+-		$product_meta['no_shipping'] = '';
+-?>		<a name="wpsc_shipping"></a>
+-		<table>
+-
+-     <!--USPS shipping changes-->
+-		   <tr>
+-			  <td>
+-				<?php _e( 'Weight', 'wpsc' ); ?>
+-			  </td>
+-			  <td>
+-				 <input type='text' size='5' name='meta[_wpsc_product_metadata][weight]' value='<?php echo $product_data['transformed']['weight']; ?>' />
+-				 <select name='meta[_wpsc_product_metadata][weight_unit]'>
+-					<option value='pound' <?php echo ( ( $product_meta['display_weight_as'] == 'pound' ) ? 'selected="selected"' : '' ); ?> ><?php _e( 'Pounds', 'wpsc' ); ?></option>
+-					<option value='ounce' <?php echo ( ( preg_match( "/o(u)?nce/", $product_meta['display_weight_as'] ) ) ? 'selected="selected"' : '' ); ?> ><?php _e( 'Ounces', 'wpsc' ); ?></option>
+-					<option value='gram' <?php echo ( ( $product_meta['display_weight_as'] == 'gram' ) ? 'selected="selected"' : '' ); ?> ><?php _e( 'Grams', 'wpsc' ); ?></option>
+-					<option value='kilogram' <?php echo ( ( $product_meta['display_weight_as'] == 'kilogram' || $product_meta['display_weight_as'] == 'kilograms' ) ? 'selected="selected"' : '' ); ?> ><?php _e( 'Kilograms', 'wpsc' ); ?></option>
+-				 </select>
+-			  </td>
+-                    </tr>
+-			  <!--dimension-->
+-			<tr>
+-			  <td>
+-				<?php _e( 'Height', 'wpsc' ); ?>
+-                          </td>
+-			  <td>
+-                             <input type='text' size='5' name='meta[_wpsc_product_metadata][dimensions][height]' value= '<?php echo  $product_meta['dimensions']['height'] ; ?>'>
+-                             <select name='meta[_wpsc_product_metadata][dimensions][height_unit]'>
+-                                    <option value='in' <?php echo ( ( $product_meta['dimensions']['height_unit'] == 'in' ) ? 'selected' : '' ); ?> ><?php _e( 'inches', 'wpsc' ); ?></option>
+-                                    <option value='cm' <?php echo ( ( $product_meta['dimensions']['height_unit'] == 'cm' ) ? 'selected' : '' ); ?> ><?php _e( 'cm', 'wpsc' ); ?></option>
+-                                    <option value='meter' <?php echo ( ( $product_meta['dimensions']['height_unit'] == 'meter' ) ? 'selected' : '' ); ?> ><?php _e( 'meter', 'wpsc' ); ?></option>
+-                             </select>
+-                             </td>
+-                         </tr>
+-                         <tr>
+-                              <td>
+-                                    <?php _e( 'Width', 'wpsc' ); ?>
+-                              </td>
+-			  <td>
+-				 <input type='text' size='5' name='meta[_wpsc_product_metadata][dimensions][width]' value='<?php echo $product_meta['dimensions']['width']; ?> '>
+-				 <select name='meta[_wpsc_product_metadata][dimensions][width_unit]'>
+-					<option value='in' <?php echo( ( $product_meta['dimensions']['width_unit'] == 'in' ) ? 'selected' : '' ); ?> ><?php _e( 'inches', 'wpsc' ); ?></option>
+-					<option value='cm' <?php echo ( ( $product_meta['dimensions']['width_unit'] == 'cm' ) ? 'selected' : '' ); ?> ><?php _e( 'cm', 'wpsc' ); ?></option>
+-					<option value='meter' <?php echo ( ( $product_meta['dimensions']['width_unit'] == 'meter' ) ? 'selected' : '' ); ?> ><?php _e( 'meter', 'wpsc' ); ?></option>
+-				 </select>
+-				 </td>
+-				 </tr>
+-				 <tr>
+-			  <td>
+-				 <?php _e( 'Length', 'wpsc' ); ?>
+-			  </td>
+-			  <td>
+-				 <input type='text' size='5' name='meta[_wpsc_product_metadata][dimensions][length]' value='<?php echo $product_meta['dimensions']['length']; ?>'>
+-				 <select name='meta[_wpsc_product_metadata][dimensions][length_unit]'>
+-					<option value='in' <?php echo( ( $product_meta['dimensions']['length_unit'] == 'in' ) ? 'selected' : '' ); ?> ><?php _e( 'inches', 'wpsc' ); ?></option>
+-					<option value='cm' <?php echo( ( $product_meta['dimensions']['length_unit'] == 'cm' ) ? 'selected' : '' ); ?> ><?php _e( 'cm', 'wpsc' ); ?></option>
+-					<option value='meter' <?php echo ( ( $product_meta['dimensions']['length_unit'] == 'meter' ) ? 'selected' : '' ); ?> ><?php _e( 'meter', 'wpsc' ); ?></option>
+-				 </select>
+-				 </td>
+-			 </tr>
+-
+-    <!--//dimension-->
+-    <!--USPS shipping changes ends-->
+-			<tr>
+-			  <td colspan='2'>
+-			  <strong><?php _e( 'Flat Rate Settings', 'wpsc' ); ?></strong>
+-			  </td>
+-			</tr>
+-			<tr>
+-			  <td>
+-                             <?php _e( 'Local Shipping Fee', 'wpsc' ); ?>
+-			  </td>
+-			  <td>
+-				<input type='text' size='10' name='meta[_wpsc_product_metadata][shipping][local]' value='<?php echo number_format( (float)$product_meta['shipping']['local'], 2, '.', '' ); ?>' />
+-			  </td>
+-			</tr>
+-
+-			<tr>
+-			  <td>
+-                            <?php _e( 'International Shipping Fee', 'wpsc' ); ?>
+-			  </td>
+-			  <td>
+-				<input type='text' size='10' name='meta[_wpsc_product_metadata][shipping][international]' value='<?php echo number_format( (float)$product_meta['shipping']['international'], 2, '.', '' ); ?>' />
+-			  </td>
+-			</tr>
+-			<tr>
+-				 <td>
+-				 <br />
+-				  <input id='add_form_no_shipping' type='checkbox' name='meta[_wpsc_product_metadata][no_shipping]' value='1' <?php echo ( ( $product_meta['no_shipping'] == 1 ) ? 'checked="checked"' : '' ); ?> />&nbsp;<label for='add_form_no_shipping'><?php _e( 'Disregard Shipping for this Product', 'wpsc' ); ?></label>
+-			   </td>
+-			</tr>
+-	    </table>
++		<div class="wpsc-product-shipping-section wpsc-product-shipping-flat-rate">
++			<p><strong><?php esc_html_e( 'Flat Rate Settings', 'wpsc' ); ?></strong></p>
++			<p class="wpsc-form-field">
++				<?php if ( $bulk ): ?>
++					<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][shipping][local]" value="1" />
++				<?php endif; ?>
++				<label for="wpsc-product-shipping-flatrate-local"><?php esc_html_e( 'Local Shipping Fee', 'wpsc' ); ?></label>
++				<input tabindex="<?php echo $tabindex; ?>" type="text" id="wpsc-product-shipping-flatrate-local" name="<?php echo $field_name_prefix; ?>[shipping][local]" value="<?php if ( ! $bulk ) echo $shipping['local']; ?>"  />
++			</p>
++			<p class="wpsc-form-field">
++				<?php if ( $bulk ): ?>
++					<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][shipping][international]" value="1" />
++				<?php endif; ?>
++				<label for="wpsc-product-shipping-flatrate-international"><?php esc_html_e( 'International Shipping Fee', 'wpsc' ); ?></label>
++				<input tabindex="<?php echo $tabindex + 1; ?>" type="text" id="wpsc-product-shipping-flatrate-international" name="<?php echo $field_name_prefix; ?>[shipping][international]" value="<?php if ( ! $bulk ) echo $shipping['international']; ?>"  />
++			</p>
++		</div>
++	</div>
+ <?php
+ }
++
+ function wpsc_product_advanced_forms() {
+ 	global $post, $wpdb, $variations_processor, $wpsc_product_defaults;
+ 	$product_data = get_post_custom( $post->ID );
+@@ -881,8 +783,8 @@ function change_context( $context ) {
+ }
+ function change_link( $link ) {
+ 	global $post_ID, $current_screen;
+-
+-	if ( $current_screen->id != 'wpsc-product' )
++	$current_screen = get_current_screen();
++	if ( $current_screen && $current_screen->id != 'wpsc-product' )
+ 		return $link;
+ 
+ 	$uploading_iframe_ID = $post_ID;
+diff --git wpsc-admin/includes/product-functions.php wpsc-admin/includes/product-functions.php
+index dfc053a..ccb8247 100644
+--- wpsc-admin/includes/product-functions.php
++++ wpsc-admin/includes/product-functions.php
+@@ -185,7 +185,7 @@ function wpsc_pre_update( $data , $postarr ) {
+         $data["post_parent"] = $postarr["parent_post"];
+ 
+ 	// Sanitize status for variations (see #324)
+-	if ( $data['post_parent'] && ( ! isset( $data['ID'] ) || $data['post_parent'] != $data['ID'] ) ) {
++	if ( $data['post_parent'] && ( ! isset( $data['ID'] ) || $data['post_parent'] != $data['ID'] ) && $data['post_status'] == 'publish' ) {
+ 		$data['post_status'] = 'inherit';
+ 	}
+ 
+@@ -531,14 +531,15 @@ function wpsc_edit_product_variations($product_id, $post_data) {
+ 	$variation_sets_and_values = apply_filters('wpsc_edit_product_variation_sets_and_values', $variation_sets_and_values, $product_id);
+ 	wp_set_object_terms($product_id, $variation_sets_and_values, 'wpsc-variation');
+ 
++	$parent_id = $_REQUEST['product_id'];
++
+ 	$child_product_template = array(
+ 		'post_author' 	=> $user_ID,
+-		'post_content' 	=> $post_data['description'],
+-		'post_excerpt' 	=> $post_data['additional_description'],
+-		'post_title' 	=> $post_data['name'],
++		'post_content' 	=> get_post_field( 'post_content', $parent_id, 'raw' ),
++		'post_excerpt' 	=> get_post_field( 'post_excerpt', $parent_id, 'raw' ),
++		'post_title' 	=> get_post_field( 'post_title', $parent_id, 'raw' ),
+ 		'post_status' 	=> 'inherit',
+ 		'post_type' 	=> "wpsc-product",
+-		'post_name' 	=> sanitize_title($post_data['name']),
+ 		'post_parent' 	=> $product_id
+ 	);
+ 
+diff --git wpsc-admin/includes/product-variation-list-table.class.php wpsc-admin/includes/product-variation-list-table.class.php
+new file mode 100644
+index 0000000..2a9faf6
+--- /dev/null
++++ wpsc-admin/includes/product-variation-list-table.class.php
+@@ -0,0 +1,609 @@
++<?php
++
++require_once( ABSPATH . 'wp-admin/includes/class-wp-list-table.php' );
++require_once( ABSPATH . 'wp-admin/includes/class-wp-posts-list-table.php' );
++
++class WPSC_Product_Variation_List_Table extends WP_List_Table
++{
++	private $product_id;
++	private $object_terms_cache = array();
++	private $args = array();
++	private $is_trash             = false;
++	private $is_draft             = false;
++	private $is_publish           = false;
++	private $is_all               = true;
++	private $is_bulk_edit         = false;
++	private $bulk_edited_items    = array();
++	private $bulk_edited_item_ids = array();
++
++	public function __construct( $product_id ) {
++		WP_List_Table::__construct( array(
++			'plural' => 'variations',
++		) );
++
++		$this->product_id = $product_id;
++		if ( isset( $_REQUEST['post_status'] ) ) {
++			$this->is_trash = $_REQUEST['post_status'] == 'trash';
++			$this->is_draft = $_REQUEST['post_status'] == 'draft';
++			$this->is_publish = $_REQUEST['post_status'] == 'publish';
++			$this->is_all = $_REQUEST['post_status'] == 'all';
++		} else {
++			$this->is_all = true;
++		}
++	}
++
++	public function prepare_items() {
++		if ( ! empty( $this->items ) )
++			return;
++
++		$this->args = array(
++			'post_type'   => 'wpsc-product',
++			'orderby'     => 'menu_order post_title',
++			'post_parent' => $this->product_id,
++			'post_status' => 'publish, inherit',
++			'numberposts' => -1,
++			'order'       => "ASC",
++		);
++
++		if ( isset( $_REQUEST['post_status'] ) )
++			$this->args['post_status'] = $_REQUEST['post_status'];
++
++		if ( isset( $_REQUEST['s'] ) )
++			$this->args['s'] = $_REQUEST['s'];
++
++		$this->items = get_posts( $this->args );
++
++		if ( empty( $this->items ) )
++			return;
++
++		$ids = wp_list_pluck( $this->items, 'ID' );
++		$object_terms = wp_get_object_terms( $ids, 'wpsc-variation', array( 'fields' => 'all_with_object_id' ) );
++		foreach ( $object_terms as $term ) {
++			if ( ! array_key_exists( $term->object_id, $this->object_terms_cache ) )
++				$this->object_terms_cache[$term->object_id] = array();
++
++			$this->object_terms_cache[$term->object_id][$term->parent] = $term->name;
++		}
++	}
++
++	public function get_hidden_columns() {
++		return array();
++	}
++
++	/**
++	 * Get a list of all, hidden and sortable columns, with filter applied
++	 *
++	 * @since 3.1.0
++	 * @access protected
++	 *
++	 * @return array
++	 */
++	public function get_column_info() {
++		if ( isset( $this->_column_headers ) )
++			return $this->_column_headers;
++
++		$screen = get_current_screen();
++
++		$columns = $this->get_columns();
++		$hidden = $this->get_hidden_columns();
++		$_sortable = $this->get_sortable_columns();
++
++		$sortable = array();
++		foreach ( $_sortable as $id => $data ) {
++			if ( empty( $data ) )
++				continue;
++
++			$data = (array) $data;
++			if ( !isset( $data[1] ) )
++				$data[1] = false;
++
++			$sortable[$id] = $data;
++		}
++
++		$this->_column_headers = array( $columns, $hidden, $sortable );
++
++		return $this->_column_headers;
++	}
++
++	public function get_columns() {
++		return array(
++			'cb'         => '<input type="checkbox" />',
++			'title'      => __( 'Title', 'wpsc' ),
++			'stock'      => __( 'Stock', 'wpsc' ),
++			'tax'        => __( 'Tax', 'wpsc' ),
++			'price'      => __( 'Price', 'wpsc' ),
++			'sale_price' => __( 'Sale Price', 'wpsc' ),
++			'sku'        => __( 'SKU', 'wpsc' ),
++		);
++	}
++
++	public function get_sortable_columns() {
++		return array();
++	}
++
++	public function column_cb( $item ) {
++		$checked = isset( $_REQUEST['variations'] ) ? checked( in_array( $item->ID, $_REQUEST['variations'] ), true, false ) : '';
++		$tabindex = 1000 + $item->index;
++		return sprintf(
++			'<input tabindex="%1$s" type="checkbox" %2$s name="%3$s[]" value="%4$s" />',
++			/*$1%s*/ $tabindex,
++			/*$2%s*/ $checked,
++			/*$3%s*/ 'post',
++			/*$4%s*/ $item->ID
++		);
++	}
++
++	private function get_row_actions( $item ) {
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		$can_edit_post = current_user_can( $post_type_object->cap->edit_post, $item->ID );
++
++		$actions = array();
++		if ( apply_filters( 'wpsc_product_variations_edit_action', false, $item ) && $can_edit_post && 'trash' != $item->post_status )
++			$actions['edit'] = '<a href="' . get_edit_post_link( $item->ID, true ) . '" title="' . esc_attr( __( 'Edit this item' ), 'wpsc' ) . '">' . __( 'Edit' ) . '</a>';
++
++		$actions['stock hide-if-no-js'] = '<a class="wpsc-variation-stock-editor-link" href="#" title="' . __( 'Show shipping editor', 'wpsc' ) . '">' . __( 'Edit Shipping', 'wpsc' ) . '</a>';
++
++		if ( $item->post_status == 'draft' ) {
++			$show_url = add_query_arg( array(
++				'bulk_action'       => 'show',
++				'post'              => $item->ID,
++				'bulk_action_nonce' => wp_create_nonce( 'wpsc_product_variations_bulk_action' ),
++			) );
++			$actions['show'] = '<a class="wpsc-variation-show-link" href="' . $show_url . '" title="' . __( 'Show this variation on the front-end', 'wpsc' ) . '">' . __( 'Publish', 'wpsc' ) . '</a>';
++		} elseif ( in_array( $item->post_status, array( 'publish', 'inherit' ) ) ) {
++			$hide_url = add_query_arg( array(
++				'bulk_action'       => 'hide',
++				'post'              => $item->ID,
++				'bulk_action_nonce' => wp_create_nonce( 'wpsc_product_variations_bulk_action' ),
++			) );
++			$actions['hide'] = '<a class="wpsc-variation-hide-link" href="' . $hide_url . '" title="' . __( 'Mark this variation as draft to hide from the front-end', 'wpsc' ) . '">' . __( 'Mark as Draft', 'wpsc' ) . '</a>';
++		}
++
++		if ( current_user_can( $post_type_object->cap->delete_post, $item->ID ) ) {
++			$force_delete = 'trash' == $item->post_status || ! EMPTY_TRASH_DAYS;
++			$redirect_url = urlencode( _wpsc_get_product_variation_form_url( $this->product_id ) );
++			$delete_link = add_query_arg( '_wp_http_referer', $redirect_url, get_delete_post_link( $item->ID, '', $force_delete ) );
++
++			if ( 'trash' == $item->post_status ) {
++				$restore_url = admin_url( sprintf( $post_type_object->_edit_link, $item->ID ) );
++				$restore_url = add_query_arg(
++					array(
++						'action'           => 'untrash',
++						'_wp_http_referer' => $redirect_url,
++					),
++					$restore_url
++				);
++				$restore_url = wp_nonce_url( $restore_url, 'untrash-' . $item->post_type . '_' . $item->ID );
++				$actions['untrash'] = "<a title='" . esc_attr( __( 'Restore this item from the Trash' ) ) . "' href='" . $restore_url . "'>" . __( 'Restore' ) . "</a>";
++			} elseif ( EMPTY_TRASH_DAYS ) {
++				$actions['trash'] = "<a class='submitdelete' title='" . esc_attr( __( 'Move this item to the Trash' ) ) . "' href='" . $delete_link . "'>" . __( 'Trash' ) . "</a>";
++			}
++
++			if ( $force_delete )
++				$actions['delete'] = "<a class='submitdelete' title='" . esc_attr( __( 'Delete this item permanently' ) ) . "' href='" . $delete_link . "'>" . __( 'Delete Permanently' ) . "</a>";
++		}
++
++		return $actions;
++	}
++
++	public function column_title( $item ) {
++		$title = implode( ', ', $this->object_terms_cache[$item->ID] );
++		$thumbnail = wpsc_the_product_thumbnail( 50, 50, $item->ID, '' );
++		if ( ! $thumbnail )
++			$thumbnail = WPSC_CORE_IMAGES_URL . '/no-image-uploaded.gif';
++		?>
++			<div class="wpsc-product-variation-thumbnail">
++				<a data-title="<?php echo $title; ?>" href="<?php echo esc_url( admin_url( 'media-upload.php?post_id=' . $item->ID . '&TB_iframe=1&width=640&height=566&product_variation=1' ) ) ?>">
++					<img id="wpsc-variation-thumbnail-<?php echo $item->ID; ?>" src="<?php echo $thumbnail; ?>" alt="" />
++				</a>
++			</div>
++			<div class="wpsc-product-variation-title">
++				<strong>
++					<a class="row-title" href="<?php echo get_edit_post_link( $item->ID ); ?>" title="<?php esc_attr_e( 'Edit this variation', 'wpsc' ) ?>"><?php echo esc_html( $title ); ?></a>
++				</strong>
++				<?php echo $this->row_actions( $this->get_row_actions( $item ) ); ?>
++			</div>
++		<?php
++	}
++
++	public function column_stock( $item ) {
++		$stock = get_product_meta( $item->ID, 'stock', true );
++		$tabindex = 100 + $item->index * 20 + 1;
++		?>
++			<input tabindex="<?php echo $tabindex; ?>" type="text" name="wpsc_variations[<?php echo $item->ID; ?>][stock]" value="<?php echo esc_attr( $stock ); ?>" />
++		<?php
++	}
++
++	public function column_price( $item ) {
++		$price = get_product_meta( $item->ID, 'price', true );
++		$tabindex = 100 + $item->index * 20 + 3;
++		?>
++			<input tabindex="<?php echo $tabindex; ?>" type="text" name="wpsc_variations[<?php echo $item->ID; ?>][price]" value="<?php echo esc_attr( $price ); ?>" />
++		<?php
++	}
++
++	public function column_sale_price( $item ) {
++		$sale_price = get_product_meta( $item->ID, 'special_price', true );
++		$tabindex = 100 + $item->index * 20 + 4;
++		?>
++			<input tabindex="<?php echo $tabindex; ?>" type="text" name="wpsc_variations[<?php echo $item->ID; ?>][sale_price]" value="<?php echo esc_attr( $sale_price ); ?>">
++		<?php
++	}
++
++	public function column_sku( $item ) {
++		$sku = get_product_meta( $item->ID, 'sku', true );
++		$tabindex = 100 + $item->index * 20 + 5;
++		?>
++			<input tabindex="<?php echo $tabindex; ?>" type="text" name="wpsc_variations[<?php echo $item->ID; ?>][sku]" value="<?php echo esc_attr( $sku ); ?>" />
++		<?php
++	}
++
++	public function column_tax( $item ) {
++		$meta = get_post_meta( $item->ID, '_wpsc_product_metadata', true );
++		$tax = (float) $meta['wpec_taxes_taxable_amount'];
++		$tabindex = 100 + $item->index * 20 + 2;
++		?>
++			<input tabindex="<?php echo $tabindex; ?>" type="text" name="wpsc_variations[<?php echo $item->ID; ?>][product_metadata][wpec_taxes_taxable_amount]" value="<?php echo esc_attr( $tax ); ?>" />
++		<?php
++	}
++
++	private function shipping_editor( $item = false ) {
++		static $row_class = '';
++		$row_class = ( $row_class == '' && $item ) ? ' alternate' : '';
++		$style = '';
++		$bulk = false;
++		if ( ! $item ) {
++			$item = get_post( $this->product_id );
++			$field_name = "wpsc_bulk_edit[product_metadata]";
++			$row_class .= " wpsc_bulk_edit_shipping";
++			if ( $this->is_bulk_edit )
++				$style = ' style="display:table-row;"';
++			$bulk = true;
++		} else {
++			$field_name = "wpsc_variations[{$item->ID}][product_metadata]";
++		}
++		?>
++		<tr class="wpsc-stock-editor-row inline-edit-row<?php echo $row_class; ?>"<?php echo $style; ?> id="wpsc-stock-editor-row-<?php echo $item->ID; ?>">
++			<td></td>
++			<td colspan="6" class="colspanchange">
++				<h4><?php esc_html_e( 'Variation Stock Editor', 'wpsc' ); ?></h4>
++				<?php wpsc_product_shipping_forms( $item, $field_name, $bulk ); ?>
++			</td>
++		</tr>
++		<?php
++	}
++
++	public function single_row( $item ) {
++		static $count = 0;
++		$count ++;
++		$item->index = $count;
++		parent::single_row( $item );
++		$this->shipping_editor( $item );
++	}
++
++	/**
++	 * Generate the table navigation above or below the table
++	 *
++	 * @since 3.1.0
++	 * @access protected
++	 */
++	public function display_tablenav( $which ) {
++		?>
++		<div class="tablenav <?php echo esc_attr( $which ); ?>">
++			<div class="alignleft actions">
++				<?php $this->bulk_actions( $which ); ?>
++			</div>
++		<?php
++		$this->extra_tablenav( $which );
++		$this->pagination( $which );
++		?>
++			<br class="clear" />
++		</div>
++		<?php
++	}
++
++	public function display_rows() {
++		$this->display_bulk_edit_row();
++		if ( ! $this->is_bulk_edit )
++			parent::display_rows();
++	}
++
++	public function display_messages() {
++		if ( isset($_REQUEST['locked']) || isset($_REQUEST['skipped']) || isset($_REQUEST['updated']) || isset($_REQUEST['deleted']) || isset($_REQUEST['trashed']) || isset($_REQUEST['untrashed']) )
++			$messages = array();
++		else
++			return;
++
++		if ( isset($_REQUEST['updated']) && (int) $_REQUEST['updated'] ) {
++			$messages[] = sprintf( _n( '%s post updated.', '%s posts updated.', $_REQUEST['updated'] ), number_format_i18n( $_REQUEST['updated'] ) );
++			unset($_REQUEST['updated']);
++		}
++
++		if ( isset($_REQUEST['skipped']) && (int) $_REQUEST['skipped'] )
++			unset($_REQUEST['skipped']);
++
++		if ( isset($_REQUEST['locked']) && (int) $_REQUEST['locked'] ) {
++			$messages[] = sprintf( _n( '%s item not updated, somebody is editing it.', '%s items not updated, somebody is editing them.', $_REQUEST['locked'] ), number_format_i18n( $_REQUEST['locked'] ) );
++			unset($_REQUEST['locked']);
++		}
++
++		if ( isset($_REQUEST['deleted']) && (int) $_REQUEST['deleted'] ) {
++			$messages[] = sprintf( _n( 'Item permanently deleted.', '%s items permanently deleted.', $_REQUEST['deleted'] ), number_format_i18n( $_REQUEST['deleted'] ) );
++			unset($_REQUEST['deleted']);
++		}
++
++		if ( isset($_REQUEST['trashed']) && (int) $_REQUEST['trashed'] ) {
++			$messages[] = sprintf( _n( 'Item moved to the Trash.', '%s items moved to the Trash.', $_REQUEST['trashed'] ), number_format_i18n( $_REQUEST['trashed'] ) );
++			$ids = isset($_REQUEST['ids']) ? $_REQUEST['ids'] : 0;
++			$undo_url = wp_nonce_url( add_query_arg( array( 'doaction' => 'undo', 'action' => 'untrash', 'ids' => $ids ) ), 'bulk-posts' );
++			$messages[] = '<a href="' . esc_url( $undo_url ) . '">' . __('Undo') . '</a>';
++			unset($_REQUEST['trashed']);
++		}
++
++		if ( isset($_REQUEST['untrashed']) && (int) $_REQUEST['untrashed'] ) {
++			$messages[] = sprintf( _n( 'Item restored from the Trash.', '%s items restored from the Trash.', $_REQUEST['untrashed'] ), number_format_i18n( $_REQUEST['untrashed'] ) );
++			unset($_REQUEST['undeleted']);
++		}
++		?>
++		<div id="message" class="updated"><p>
++		<?php
++		echo join( ' ', $messages ); unset( $messages );
++		$_SERVER['REQUEST_URI'] = remove_query_arg( array('locked', 'skipped', 'updated', 'deleted', 'trashed', 'untrashed'), $_SERVER['REQUEST_URI'] );
++		echo '</p></div>';
++	}
++
++	public function get_bulk_actions() {
++		$actions = array();
++
++		if ( $this->is_trash )
++			$actions['untrash'] = __( 'Restore' );
++
++		if ( $this->is_draft )
++			$actions['show'] = __( 'Publish', 'wpsc' );
++		elseif ( $this->is_all || $this->is_publish )
++			$actions['hide'] = __( 'Mark as Draft', 'wpsc' );
++
++		$actions['edit'] = __( 'Edit', 'wpsc' );
++
++		if ( $this->is_trash || !EMPTY_TRASH_DAYS )
++			$actions['delete'] = __( 'Delete Permanently' );
++		else
++			$actions['trash'] = __( 'Move to Trash' );
++
++		return $actions;
++	}
++
++	public function bulk_actions() {
++		$screen = get_current_screen();
++
++		if ( is_null( $this->_actions ) ) {
++			$no_new_actions = $this->_actions = $this->get_bulk_actions();
++			// This filter can currently only be used to remove actions.
++			$this->_actions = apply_filters( 'bulk_actions-' . $screen->id, $this->_actions );
++			$this->_actions = array_intersect_assoc( $this->_actions, $no_new_actions );
++			$two = '';
++		} else {
++			$two = '2';
++		}
++
++		if ( empty( $this->_actions ) )
++			return;
++
++		echo '<input type="hidden" name="bulk_action_nonce" value="' . wp_create_nonce( 'wpsc_product_variations_bulk_action' ) .'" />';
++		echo "<select name='bulk_action$two'>\n";
++		echo "<option value='-1' selected='selected'>" . __( 'Bulk Actions' ) . "</option>\n";
++
++		foreach ( $this->_actions as $name => $title ) {
++			$class = 'edit' == $name ? ' class="hide-if-no-js"' : '';
++
++			echo "\t<option value='$name'$class>$title</option>\n";
++		}
++
++		echo "</select>\n";
++
++		submit_button( __( 'Apply' ), 'button-secondary action', false, false, array( 'id' => "doaction$two" ) );
++		echo "\n";
++	}
++
++	public function current_action() {
++		if ( isset( $_REQUEST['bulk_action'] ) && -1 != $_REQUEST['bulk_action'] )
++			return $_REQUEST['bulk_action'];
++
++		if ( isset( $_REQUEST['bulk_action2'] ) && -1 != $_REQUEST['bulk_action2'] )
++			return $_REQUEST['bulk_action2'];
++
++		return false;
++	}
++
++	private function count_variations() {
++		global $wpdb;
++		$query = $wpdb->prepare( "SELECT post_status, COUNT( * ) AS num_posts FROM {$wpdb->posts} WHERE post_type = 'wpsc-product' AND post_parent = %d GROUP BY post_status", $this->product_id );
++		$results = $wpdb->get_results( $query );
++
++		$return = array();
++		foreach ( get_post_stati() as $state )
++			$stats[$state] = 0;
++
++		foreach ( $results as $row ) {
++			$return[$row->post_status] = $row->num_posts;
++		}
++
++		return (object) $return;
++	}
++
++	public function get_views() {
++		global $locked_post_status;
++		$parent = get_post( $this->product_id );
++		$avail_post_stati = get_available_post_statuses( 'wpsc-product' );
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		$post_type = $post_type_object->name;
++		$url_base = add_query_arg( array(
++				'action' => 'wpsc_product_variations_table',
++				'product_id' => $_REQUEST['product_id'],
++				'_wpnonce' => wp_create_nonce( 'wpsc_product_variations_table' ),
++			), admin_url( 'admin-ajax.php' ) );
++
++		if ( !empty($locked_post_status) )
++			return array();
++
++		$status_links = array();
++		$num_posts = $this->count_variations();
++		$class = '';
++
++		$current_user_id = get_current_user_id();
++
++		if ( isset( $num_posts->inherit ) ) {
++			$key = $parent->post_status;
++			if ( ! isset( $num_posts->$key ) )
++				$num_posts->$key = 0;
++
++			$num_posts->$key += $num_posts->inherit;
++			unset( $num_posts->inherit );
++		}
++
++		$total_posts = array_sum( (array) $num_posts );
++
++		// Subtract post types that are not included in the admin all list.
++		foreach ( get_post_stati( array('show_in_admin_all_list' => false) ) as $state ) {
++			if ( isset( $num_posts->$state ) )
++				$total_posts -= $num_posts->$state;
++		}
++
++		$class = empty( $class ) && empty( $_REQUEST['post_status'] ) && empty( $_REQUEST['show_sticky'] ) ? ' class="current"' : '';
++		$status_links['all'] = "<a href='{$url_base}'$class>" . sprintf( _nx( 'All <span class="count">(%s)</span>', 'All <span class="count">(%s)</span>', $total_posts, 'posts' ), number_format_i18n( $total_posts ) ) . '</a>';
++
++		foreach ( get_post_stati(array('show_in_admin_status_list' => true), 'objects') as $status ) {
++			$class = '';
++
++			$status_name = $status->name;
++
++			if ( $status_name == 'publish' )
++				continue;
++
++			if ( !in_array( $status_name, $avail_post_stati ) )
++				continue;
++
++			if ( empty( $num_posts->$status_name ) ) {
++				if ( isset( $_REQUEST['post_status'] ) && $status_name == $_REQUEST['post_status'] )
++					$num_posts->$_REQUEST['post_status'] = 0;
++				else
++					continue;
++			}
++
++			if ( isset($_REQUEST['post_status']) && $status_name == $_REQUEST['post_status'] )
++				$class = ' class="current"';
++
++			$status_links[$status_name] = "<a href='" . esc_url( add_query_arg( 'post_status', $status_name, $url_base ) ) ."'$class>" . sprintf( translate_nooped_plural( $status->label_count, $num_posts->$status_name ), number_format_i18n( $num_posts->$status_name ) ) . '</a>';
++		}
++
++		return $status_links;
++	}
++
++	public function set_bulk_edited_items( $item_ids ) {
++		$this->prepare_items();
++		$this->is_bulk_edit = true;
++		foreach ( $this->items as $key => $item ) {
++			if ( in_array( $item->ID, $item_ids ) ) {
++				$this->bulk_edited_items[] = $item;
++				unset( $this->items[$key] );
++			}
++		}
++		$this->bulk_edited_item_ids = $item_ids;
++	}
++
++	private function display_bulk_edit_row() {
++		$style = $this->is_bulk_edit ? '' : ' style="display:none";';
++		$classes = 'wpsc-bulk-edit';
++		if ( $this->is_bulk_edit )
++			$classes .= ' active';
++		echo "<tr{$style} class='{$classes}'>";
++		list( $columns, $hidden ) = $this->get_column_info();
++		foreach ( $columns as $column_name => $column_display_name ) {
++			$class = "class='$column_name column-$column_name inline-edit-row'";
++			$style = '';
++
++			if ( in_array( $column_name, $hidden ) )
++				$style = ' style="display:none;"';
++
++			$attributes = "$class$style";
++
++			if ( $column_name == 'cb' )
++				echo '<td></td>';
++			elseif ( method_exists( $this, 'bulk_edit_column_' . $column_name ) ) {
++				echo "<td $attributes>";
++				echo call_user_func( array( &$this, 'bulk_edit_column_' . $column_name ) );
++				echo "</td>";
++			}
++		}
++		echo '</tr>';
++		$this->shipping_editor();
++	}
++
++	public function bulk_edit_column_title() {
++		?>
++		<div class="wpsc-bulk-edit-items">
++			<?php foreach ( $this->bulk_edited_items as $item ):
++					$title = implode( ', ', $this->object_terms_cache[$item->ID] );
++			?>
++				<div class="wpsc-bulk-edit-item">
++					<span>
++						<input type="checkbox" name="wpsc_bulk_edit[post][]" checked="checked" value="<?php echo $item->ID; ?>" />
++					</span>
++					<strong>
++						<a class="row-title" href="<?php echo get_edit_post_link( $item->ID ); ?>" title="<?php esc_attr_e( 'Edit this variation', 'wpsc' ) ?>"><?php echo esc_html( $title ); ?></a>
++					</strong>
++				</div>
++			<?php endforeach; ?>
++		</div>
++		<?php
++	}
++
++	public function bulk_edit_column_stock() {
++		?>
++			<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][stock]" value="1" />
++			<input tabindex="101" type="text" name="wpsc_bulk_edit[stock]" value="" />
++		<?php
++	}
++
++	public function bulk_edit_column_price() {
++		?>
++			<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][price]" value="1" />
++			<input tabindex="103" type="text" name="wpsc_bulk_edit[price]" value="" />
++		<?php
++	}
++
++	public function bulk_edit_column_tax() {
++		?>
++			<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][wpec_taxes_taxable_amount]" value="1" />
++			<input tabindex="102" type="text" name="wpsc_bulk_edit[product_metadata][wpec_taxes_taxable_amount]" value="" />
++		<?php
++	}
++
++	public function bulk_edit_column_sku() {
++		?>
++			<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][sku]" value="1" />
++			<input tabindex="105" type="text" name="wpsc_bulk_edit[sku]" value="" />
++		<?php
++	}
++
++	public function bulk_edit_column_sale_price() {
++		$sale_price = get_product_meta( $this->product_id, 'special_price', true );
++		?>
++			<input class="wpsc-bulk-edit-fields" type="checkbox" name="wpsc_bulk_edit[fields][sale_price]" value="1" />
++			<input tabindex="104" type="text" name="wpsc_bulk_edit[sale_price]" value="">
++		<?php
++	}
++
++	public function extra_tablenav( $which ) {
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		?><div class="alignleft actions"><?php
++		if ( $this->is_trash && current_user_can( $post_type_object->cap->edit_others_posts ) ) {
++			submit_button( __( 'Empty Trash' ), 'button-secondary apply', 'delete_all', false );
++		}
++		?></div>
++		<div class="alignright">
++			<?php submit_button( __( 'Save Variations', 'wpsc' ) ); ?>
++		</div>
++		<?php
++	}
++}
+\ No newline at end of file
+diff --git wpsc-admin/includes/product-variations-manage.page.php wpsc-admin/includes/product-variations-manage.page.php
+new file mode 100644
+index 0000000..4e41909
+--- /dev/null
++++ wpsc-admin/includes/product-variations-manage.page.php
+@@ -0,0 +1,7 @@
++<?php $this->list_table->display_messages(); ?>
++<form action="" method="post">
++	<?php $this->list_table->views(); ?>
++	<input type="hidden" name="post_status" class="post_status_page" value="<?php echo !empty($_REQUEST['post_status']) ? esc_attr($_REQUEST['post_status']) : 'all'; ?>" />
++	<?php wp_nonce_field( 'wpsc_save_variations_meta', '_wpsc_save_meta_nonce' ); ?>
++	<?php $this->list_table->display(); ?>
++</form>
+\ No newline at end of file
+diff --git wpsc-admin/includes/product-variations-page.class.php wpsc-admin/includes/product-variations-page.class.php
+new file mode 100644
+index 0000000..97d9514
+--- /dev/null
++++ wpsc-admin/includes/product-variations-page.class.php
+@@ -0,0 +1,336 @@
++<?php
++
++class WPSC_Product_Variations_Page
++{
++	private $list_table;
++	private $parent_id;
++	private $current_tab = 'manage';
++	private $post;
++
++	public function __construct() {
++		require_once( WPSC_FILE_PATH . '/wpsc-admin/includes/product-variation-list-table.class.php' );
++		$GLOBALS['hook_suffix'] = 'wpsc-product-variations-iframe';
++		$this->parent_id = absint( $_REQUEST['product_id'] );
++		set_current_screen();
++
++		if ( ! empty( $_REQUEST['tab'] ) )
++			$this->current_tab = $_REQUEST['tab'];
++	}
++
++	private function merge_meta_deep( $original, $updated ) {
++		foreach ( $original as $key => $value ) {
++			if ( ! isset( $updated[$key] ) )
++				continue;
++
++			if ( is_array( $value ) ) {
++				$original[$key] = $this->merge_meta_deep( $value, $updated[$key] );
++			} else {
++				$original[$key] = $updated[$key];
++				if ( in_array( $key, array( 'weight', 'wpec_taxes_taxable_amount', 'height', 'width', 'length' ) ) )
++					$original[$key] = (float) $original[$key];
++			}
++
++		}
++
++		return $original;
++	}
++
++	private function save_variation_meta( $id, $data ) {
++		$product_meta = get_product_meta( $id, 'product_metadata', true );
++		$product_meta = $this->merge_meta_deep( $product_meta, $data['product_metadata'] );
++		// convert to pound to maintain backward compat with shipping modules
++		$product_meta['weight'] = wpsc_convert_weight( $product_meta['weight'], $product_meta['weight_unit'], 'pound', true );
++
++		update_product_meta( $id, 'product_metadata', $product_meta );
++
++		if ( isset( $data['price'] ) )
++			update_product_meta( $id, 'price', (float) $data['price'] );
++
++		if ( isset( $data['sale_price'] ) )
++			update_product_meta( $id, 'special_price', $data['sale_price'] );
++
++		if ( isset( $data['sku'] ) )
++			update_product_meta( $id, 'sku', $data['sku'] );
++
++		if ( isset( $data['stock'] ) ) {
++			if ( is_numeric( $data['stock'] ) )
++				update_product_meta( $id, 'stock', absint( $data['stock'] ) );
++			else
++				update_product_meta( $id, 'stock', '' );
++		}
++	}
++
++	private function save_variations_meta(){
++		if ( empty( $_REQUEST['wpsc_variations'] ) )
++			return;
++
++		check_admin_referer( 'wpsc_save_variations_meta', '_wpsc_save_meta_nonce' );
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		if ( ! current_user_can( $post_type_object->cap->edit_posts ) )
++			wp_die( __( 'Cheatin&#8217; uh?' ) );
++
++		foreach ( $_REQUEST['wpsc_variations'] as $id => $data ) {
++			$this->save_variation_meta( $id, $data );
++		}
++	}
++
++	public function display() {
++		global $title, $hook_suffix, $current_screen, $wp_locale, $pagenow, $wp_version, $is_iphone,
++		$current_site, $update_title, $total_update_count, $parent_file;
++
++		$current_screen = get_current_screen();
++		$admin_body_class = $hook_suffix;
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++
++		wp_enqueue_style( 'colors' );
++		wp_enqueue_style( 'ie'     );
++		wp_enqueue_script( 'common'       );
++		wp_enqueue_script( 'jquery-color' );
++		wp_enqueue_script( 'utils'        );
++		wp_enqueue_script( 'jquery-query' );
++
++		$callback = "callback_tab_{$this->current_tab}";
++		if ( ! is_callable( array( $this, "callback_tab_{$this->current_tab}" ) ) )
++			$callback = "callback_tab_manage";
++
++		$this->$callback();
++		@header('Content-Type: ' . get_option('html_type') . '; charset=' . get_option('blog_charset'));
++		require_once( WPSC_FILE_PATH . "/wpsc-admin/includes/product-variations.page.php" );
++	}
++
++	private function display_tabs() {
++		$tabs = array(
++			'manage'   => _x( 'Manage', 'manage product variations', 'wpsc' ),
++			'setup' => __( 'Setup', 'wpsc' ),
++		);
++		echo '<ul class="wpsc-product-variations-tabs">';
++		foreach ( $tabs as $tab => $title ) {
++			$class = ( $tab == $this->current_tab ) ? ' class="active"' : '';
++			$item = '<li' . $class . '>';
++			$item .= '<a href="' . add_query_arg( 'tab', $tab ) . '">' . esc_html( $title ) . '</a></li>';
++			echo $item;
++		}
++		echo '</ul>';
++	}
++
++	private function callback_tab_manage() {
++		$this->list_table = new WPSC_Product_Variation_List_Table( $this->parent_id );
++		$this->save_variations_meta();
++		$this->process_bulk_action();
++		$this->list_table->prepare_items();
++	}
++
++	private function callback_tab_setup() {
++		global $post;
++		require_once( 'walker-variation-checklist.php' );
++
++		$this->generate_variations();
++	}
++
++	private function generate_variations() {
++		if ( ! isset( $_REQUEST['action2'] ) || $_REQUEST['action2'] != 'generate' )
++			return;
++
++		check_admin_referer( 'wpsc_generate_product_variations', '_wpsc_generate_product_variations_nonce' );
++
++		wpsc_update_variations();
++
++		$sendback = remove_query_arg( array(
++			'_wp_http_referer',
++			'updated',
++		) );
++		wp_redirect( add_query_arg( 'tab', 'manage', $sendback ) );
++		exit;
++	}
++
++	public function display_current_tab() {
++		require_once( WPSC_FILE_PATH . "/wpsc-admin/includes/product-variations-{$this->current_tab}.page.php" );
++	}
++
++	public function process_bulk_action_delete_all( $post_ids ) {
++		$post_status = preg_replace( '/[^a-z0-9_-]+/i', '', $_REQUEST['post_status'] );
++		if ( get_post_status_object( $post_status ) ) // Check the post status exists first
++			$post_ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE post_type='wpsc-product' AND post_status = %s", $post_type, $post_status ) );
++
++		return $this->process_bulk_action_delete( $post_ids );
++	}
++
++	public function process_bulk_action_trash( $post_ids ) {
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		$trashed = 0;
++		foreach( (array) $post_ids as $post_id ) {
++			if ( !current_user_can( $post_type_object->cap->delete_post, $post_id ) )
++				wp_die( __( 'You are not allowed to move this item to the Trash.' ) );
++
++			if ( !wp_trash_post( $post_id ) )
++				wp_die( __( 'Error in moving to Trash.' ) );
++
++			$trashed++;
++		}
++		return add_query_arg( array( 'trashed' => $trashed, 'ids' => join( ',', $post_ids ) ) );
++	}
++
++	public function process_bulk_action_untrash( $post_ids ) {
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		$untrashed = 0;
++		foreach( (array) $post_ids as $post_id ) {
++			if ( ! current_user_can( $post_type_object->cap->delete_post, $post_id ) )
++				wp_die( __( 'You are not allowed to restore this item from the Trash.' ) );
++
++			if ( !wp_untrash_post( $post_id ) )
++				wp_die( __( 'Error in restoring from Trash.' ) );
++
++			$untrashed++;
++		}
++		return add_query_arg( 'untrashed', $untrashed );
++	}
++
++	public function process_bulk_action_delete( $post_ids ) {
++		$deleted = 0;
++		$post_type_object = get_post_type_object( 'wpsc-product' );
++		foreach( (array) $post_ids as $post_id ) {
++			$post_del = & get_post( $post_id );
++
++			if ( ! current_user_can( $post_type_object->cap->delete_post, $post_id ) )
++				wp_die( __( 'You are not allowed to delete this item.' ) );
++
++			if ( $post_del->post_type == 'attachment' ) {
++				if ( ! wp_delete_attachment( $post_id ) )
++					wp_die( __( 'Error in deleting...' ) );
++			} else {
++				if ( ! wp_delete_post( $post_id ) )
++					wp_die( __( 'Error in deleting...' ) );
++			}
++			$deleted++;
++		}
++		return add_query_arg( 'deleted', $deleted );
++	}
++
++	public function process_bulk_action_hide( $post_ids ) {
++		$updated = 0;
++		foreach( $post_ids as $id ) {
++			wp_update_post( array(
++				'ID'          => $id,
++				'post_status' => 'draft',
++			) );
++			$updated ++;
++		}
++		return add_query_arg( 'updated', $updated );
++	}
++
++	public function process_bulk_action_show( $post_ids ) {
++		$updated = 0;
++		foreach ( $post_ids as $id ) {
++			wp_update_post( array(
++				'ID' => $id,
++				'post_status' => 'publish',
++			) );
++			$updated ++;
++		}
++		return add_query_arg( 'updated', $updated );
++	}
++
++	private function save_bulk_edited_items() {
++		$ids = array_map( 'absint', $_REQUEST['wpsc_bulk_edit']['post'] );
++		$data = $_REQUEST['wpsc_bulk_edit'];
++
++		if ( empty( $_REQUEST['wpsc_bulk_edit']['fields'] ) )
++			return;
++
++		$fields = $_REQUEST['wpsc_bulk_edit']['fields'];
++
++		foreach ( array( 'stock', 'price', 'sale_price', 'sku' ) as $field ) {
++			if ( empty( $fields[$field] ) )
++				unset( $data[$field] );
++		}
++
++		if ( empty( $fields['shipping'] ) )
++			unset( $data['product_metadata']['shipping'] );
++		else {
++			foreach ( array( 'local', 'international' ) as $field ) {
++				if ( empty( $fields['shipping'][$field] ) )
++					unset( $data['product_metadata'][$field] );
++			}
++		}
++
++		if ( empty( $fields['measurements'] ) ) {
++			unset( $data['product_metadata']['dimensions'] );
++			unset( $data['product_metadata']['weight'] );
++			unset( $data['product_metadata']['weight_unit'] );
++		} else {
++			if ( empty( $fields['measurements']['weight'] ) ) {
++				unset( $data['product_metadata']['weight'] );
++				unset( $data['product_metadata']['weight_unit'] );
++			}
++
++			foreach ( array( 'height', 'width', 'length' ) as $field ) {
++				if ( empty( $fields['measurements'][$field] ) ) {
++					unset( $data['product_metadata']['dimensions'][$field] );
++					unset( $data['product_metadata']['dimensions'][$field . '_unit'] );
++				}
++			}
++		}
++
++		unset( $data['post'] );
++		unset( $data['fields'] );
++
++		foreach ( $ids as $id ) {
++			$this->save_variation_meta( $id, $data );
++		}
++
++		$sendback = $_SERVER['REQUEST_URI'];
++		$sendback = remove_query_arg( array(
++			'_wp_http_referer',
++			'bulk_action',
++			'bulk_action2',
++			'bulk_action_nonce',
++			'confirm',
++			'post',
++			'last_paged'
++		), $sendback );
++		$sendback = add_query_arg( 'updated', count( $ids ), $sendback );
++		wp_redirect( $sendback );
++		exit;
++	}
++
++	public function process_bulk_action_edit( $post_ids ) {
++		$this->list_table->set_bulk_edited_items( $post_ids );
++	}
++
++	public function process_bulk_action() {
++		if ( ! empty( $_REQUEST['wpsc_bulk_edit']['post'] ) ) {
++			$this->save_bulk_edited_items();
++			return;
++		}
++
++		$current_action = $this->list_table->current_action();
++		if ( empty( $current_action ) )
++			return;
++
++		check_admin_referer( 'wpsc_product_variations_bulk_action', 'bulk_action_nonce' );
++		$sendback = $_SERVER['REQUEST_URI'];
++		$callback = 'process_bulk_action_' . $current_action;
++
++		$post_ids = isset( $_REQUEST['post'] ) ? $_REQUEST['post'] : array();
++		if ( ! is_array( $post_ids ) )
++			$post_ids = explode( ',', $post_ids );
++		$post_ids = array_map('intval', $post_ids);
++		if ( ! empty( $post_ids ) && is_callable( array( $this, $callback ) ) )
++			$sendback = $this->$callback( $post_ids );
++
++		$sendback = remove_query_arg( array(
++			'_wp_http_referer',
++			'bulk_action',
++			'bulk_action2',
++			'bulk_action_nonce',
++			'confirm',
++			'post',
++			'last_paged'
++		), $sendback );
++
++		if ( $current_action != 'edit' ) {
++			wp_redirect( $sendback );
++			exit;
++		}
++	}
++}
+\ No newline at end of file
+diff --git wpsc-admin/includes/product-variations-setup.page.php wpsc-admin/includes/product-variations-setup.page.php
+new file mode 100644
+index 0000000..cff7fdd
+--- /dev/null
++++ wpsc-admin/includes/product-variations-setup.page.php
+@@ -0,0 +1,40 @@
++<div id="product_variations">
++	<h4><a href="#wpsc_variation_metabox" class="add_variation_set_action"><?php esc_html_e( '+ Add New Variants', 'wpsc' ) ?></a></h4>
++
++	<div id="add-new-variation-set">
++		<p>
++			<label for="new-variation-set-name"><?php esc_html_e( "Enter variation set's name", 'wpsc' ); ?></label>
++			<input type="text" class="text-field" id="new-variation-set-name" /><br />
++		</p>
++		<p class="howto"><?php esc_html_e( "Example: Color. If you want to add variants to an existing set, you can enter the name of that set here.", 'wpsc' ); ?></p>
++		<p>
++			<label for="new-variants"><?php esc_html_e( "Enter new variants", 'wpsc' ); ?></label>
++			<input type="text" class="text-field" id="new-variants" /><br />
++		</p>
++		<p class="howto"><?php esc_html_e( "Example: Red, Green, Blue. Separate variants with commas.", 'wpsc' ); ?></p>
++		<p>
++			<a class="button" href="#"><?php esc_html_e( 'Add New Variants', 'wpsc' ); ?></a>
++			<img src="<?php echo esc_url( admin_url( 'images/wpspin_light.gif' ) ); ?>" class="ajax-feedback" title="" alt="" /><br class="clear" />
++		</p>
++	</div>
++
++	<p><a name='variation_control'>&nbsp;</a><?php _e( 'Select the Variation sets and then the corresponding Variants you want to add to this product.', 'wpsc' ) ?></p>
++
++	<form action="" method="post">
++		<ul class="variation_checkboxes">
++			<?php
++				wp_terms_checklist( $this->parent_id, array(
++					'taxonomy'      => 'wpsc-variation',
++					'walker'        => new WPSC_Walker_Variation_Checklist(),
++					'checked_ontop' => false,
++				) );
++			?>
++		</ul>
++		<input type="hidden" name="action2" value="generate" />
++		<input type="hidden" name="product_id" value="<?php echo $this->parent_id; ?>" />
++		<?php wp_nonce_field( 'wpsc_generate_product_variations', '_wpsc_generate_product_variations_nonce' ); ?>
++		<?php submit_button( __( 'Generate Variations', 'wpsc' ) ); ?>
++	</form>
++
++	<div class="clear"></div>
++</div>
+\ No newline at end of file
+diff --git wpsc-admin/includes/product-variations.page.php wpsc-admin/includes/product-variations.page.php
+new file mode 100644
+index 0000000..2427ebb
+--- /dev/null
++++ wpsc-admin/includes/product-variations.page.php
+@@ -0,0 +1,49 @@
++<?php _wp_admin_html_begin(); ?>
++<title><?php esc_html_e( 'Manage Product Variations', 'wpsc' ); ?></title>
++<script type="text/javascript">
++addLoadEvent = function(func){if(typeof jQuery!="undefined")jQuery(document).ready(func);else if(typeof wpOnload!='function'){wpOnload=func;}else{var oldonload=wpOnload;wpOnload=function(){oldonload();func();}}};
++var userSettings = {
++		'url': '<?php echo SITECOOKIEPATH; ?>',
++		'uid': '<?php if ( ! isset($current_user) ) $current_user = wp_get_current_user(); echo $current_user->ID; ?>',
++		'time':'<?php echo time() ?>'
++	},
++	ajaxurl = '<?php echo admin_url( 'admin-ajax.php', 'relative' ); ?>',
++	pagenow = '<?php echo $current_screen->id; ?>',
++	typenow = '<?php echo $current_screen->post_type; ?>',
++	adminpage = '<?php echo $admin_body_class; ?>',
++	thousandsSeparator = '<?php echo addslashes( $wp_locale->number_format['thousands_sep'] ); ?>',
++	decimalPoint = '<?php echo addslashes( $wp_locale->number_format['decimal_point'] ); ?>',
++	isRtl = <?php echo (int) is_rtl(); ?>;
++</script>
++<?php
++	do_action('admin_enqueue_scripts', $hook_suffix);
++	do_action("admin_print_styles-$hook_suffix");
++	do_action('admin_print_styles');
++	do_action("admin_print_scripts-$hook_suffix");
++	do_action('admin_print_scripts');
++	do_action("admin_head-$hook_suffix");
++	do_action('admin_head');
++?>
++<style type="text/css">
++	html {
++		background-color:transparent;
++	}
++</style>
++</head>
++<body class="no-js">
++<script type="text/javascript">document.body.className = document.body.className.replace('no-js','js');</script>
++
++<div id="wpsc-product-variations-wrapper">
++	<?php $this->display_tabs(); ?>
++	<div class="wpsc-product-variations-tab-content">
++		<?php $this->display_current_tab(); ?>
++	</div>
++</div>
++
++<?php
++do_action('admin_print_footer_scripts');
++do_action("admin_footer-" . $GLOBALS['hook_suffix']);
++?>
++<script type="text/javascript">if(typeof wpOnload=='function')wpOnload();</script>
++</body>
++</html>
+\ No newline at end of file
+diff --git wpsc-admin/includes/walker-variation-checklist.php wpsc-admin/includes/walker-variation-checklist.php
+index 78e39e0..9d9146f 100644
+--- wpsc-admin/includes/walker-variation-checklist.php
++++ wpsc-admin/includes/walker-variation-checklist.php
+@@ -18,7 +18,7 @@ class WPSC_Walker_Variation_Checklist extends Walker_Category_Checklist {
+ 		$checked = in_array( $category->term_id, $selected_cats );
+ 		$input_class = ( $depth === 0 ) ? ' class="variation-set"' : '';
+ 		$li_classes = array( 'wpsc-variation-checklist-item' );
+-		if ( $depth === 0 && defined( 'DOING_AJAX' ) && DOING_AJAX ) {
++		if ( $depth === 0 && wpsc_is_doing_ajax( 'add_variation_set' ) ) {
+ 			$li_classes[] = 'expanded';
+ 			$li_classes[] = 'ajax';
+ 		} elseif ( $checked && $depth === 0 ) {
+diff --git wpsc-admin/init.php wpsc-admin/init.php
+index 148b424..0954a36 100644
+--- wpsc-admin/init.php
++++ wpsc-admin/init.php
+@@ -625,9 +625,6 @@ function wpsc_update_variations() {
+ 	//Setup postdata
+ 	$post_data = array( );
+ 	$post_data['edit_var_val'] = isset( $_POST['edit_var_val'] ) ? $_POST["edit_var_val"] : '';
+-	$post_data['description'] = isset( $_POST['description'] ) ? $_POST["description"] : '';
+-	$post_data['additional_description'] = isset( $_POST['additional_description'] ) ? $_POST['additional_description'] : '';
+-	$post_data['name'] = (!empty($_POST['name']))?$_POST['name']:$_POST["post_title"];
+ 
+ 	//Add or delete variations
+ 	wpsc_edit_product_variations( $product_id, $post_data );
+diff --git wpsc-admin/js/product-variations.js wpsc-admin/js/product-variations.js
+new file mode 100644
+index 0000000..cfef7b8
+--- /dev/null
++++ wpsc-admin/js/product-variations.js
+@@ -0,0 +1,219 @@
++(function($){
++	$(function(){
++		var content_height;
++		if (typeof window.parent.wpsc_resize_iframe != 'undefined') {
++			window.parent.wpsc_resize_iframe();
++		}
++
++		$('.wpsc-variation-stock-editor-link').click(function(){
++			var parent = $(this).closest('tr'),
++				target_row = parent.next('.wpsc-stock-editor-row');
++
++			target_row.show();
++			parent.addClass('active');
++			window.parent.wpsc_resize_iframe();
++
++			return false;
++		});
++	});
++
++	var new_variation_set_count = 0;
++
++	$(function(){
++		$('.variation_checkboxes').delegate('.variation-set', 'click', event_toggle_checkboxes).
++		                           delegate('a.expand', 'click', event_toggle_children).
++		                           delegate('.selectit input:checkbox', 'click', event_display_apply_variations).
++		                           delegate('.children input:checkbox', 'click', event_toggle_parent);
++
++		$('a.add_variation_set_action').bind('click', event_add_new_variation_set);
++		$('#add-new-variation-set .button').bind('click', event_variation_set_add);
++		$('#add-new-variation-set input[type="text"]').bind('keypress', event_variation_set_inputs_keypress).
++		                                               bind('focus', event_variation_set_inputs_focus).
++		                                               bind('blur', event_variation_set_inputs_blur);
++		$('.wpsc-product-variation-thumbnail a').bind('click', event_variation_thumbnail_click);
++		$('.wpsc-bulk-edit').delegate('input.wpsc-bulk-edit-fields', 'change', event_bulk_edit_checkboxes_changed).
++		                     delegate('input[type="text"]', 'keyup', event_bulk_edit_textboxes_keyup);
++	});
++
++	var event_bulk_edit_textboxes_keyup = function() {
++		var t = $(this),
++		    checkbox = t.siblings('input.wpsc-bulk-edit-fields')[0];
++		if ($.trim(t.val()) != '')
++			checkbox.checked = true;
++	};
++
++	var event_bulk_edit_checkboxes_changed = function() {
++		var t = $(this);
++		if (t[0].checked)
++			t.siblings('input[type="text"]').focus();
++	};
++
++	var event_variation_thumbnail_click = function() {
++		var t = $(this);
++		window.parent.wpsc_display_thickbox(t.data('title'), t.attr('href'));
++		return false;
++	};
++
++	/**
++	 * Save new variation set using AJAX
++	 * @since 3.8.8
++	 */
++	var event_variation_set_add = function() {
++		var form = $('#add-new-variation-set');
++
++		form.find('.error').removeClass('error');
++
++		form.find('input[type="text"]').each(function(){
++			var t = $(this);
++			if (t.val() == '') {
++				t.parent().addClass('error');
++			}
++		});
++
++		if (form.find('.error').size() === 0) {
++			var spinner = $(this).siblings('.ajax-feedback'),
++				post_data = {
++					action        : 'add_variation_set',
++					variation_set : $('#new-variation-set-name').val(),
++					variants      : $('#new-variants').val(),
++					post_id       : $('input[name="post_ID"]').val(),
++					nonce         : WPSC_Variations.add_variation_set_nonce
++				},
++				ajax_callback = function(response) {
++					var checklist, color, set_id, existing_set, content;
++					if (response.is_successful) {
++						checklist = $('.variation_checkboxes');
++						content = $(response.obj.content);
++						set_id = content.attr('id');
++						existing_set = checklist.find('#' + set_id);
++						if (existing_set.size() > 0) {
++							existing_set.find('.children').append(content.find('.children .ajax'));
++						} else {
++							checklist.append(content);
++						}
++
++						color = checklist.find('li').css('backgroundColor') || '#FFFFFF';
++						checklist.find('.ajax').
++							animate({ backgroundColor: '#FFFF33' }, 'fast').
++							animate({ backgroundColor: color }, 'fast', function(){
++								$(this).css('backgroundColor', 'transparent');
++							}).
++							removeClass('ajax');
++					} else {
++						alert(response.error.messages.join("\n"));
++					}
++					form.hide().find('input:text').val('');
++					form.find('label').show().css('opacity', '1');
++					spinner.toggleClass('ajax-feedback-active');
++				};
++
++			spinner.toggleClass('ajax-feedback-active');
++			$.wpsc_post(post_data, ajax_callback);
++
++		}
++
++		return false;
++	};
++
++	/**
++	 * Dim the new variation set inputs' labels when focused.
++	 * @since 3.8.8
++	 */
++	var event_variation_set_inputs_focus = function() {
++		$(this).siblings('label').animate({opacity:0.5}, 150);
++	};
++
++	/**
++	 * Restore opacity to the "new variation set" inputs' labels when blurred.
++	 * @since 3.8.8
++	 */
++	var event_variation_set_inputs_blur = function() {
++		var t = $(this);
++		if (t.val() == '') {
++			t.siblings('label').show().animate({opacity:1}, 150);
++		}
++	};
++
++	/**
++	 * Remove class "error" when something is typed into the new variation set textboxes
++	 * @since 3.8.8
++	 */
++	var event_variation_set_inputs_keypress = function(e) {
++		var code = e.keyCode ? e.keyCode : e.which;
++		if (code == 13) {
++			$('#add-new-variation-set .button').trigger('click');
++			e.preventDefault();
++		} else {
++			$(this).siblings('label').hide().removeClass('error');
++		}
++	};
++
++	/**
++	 * Show the Add Variation Set form and focus on the first text field
++	 * @since 3.8.8
++	 */
++	var event_add_new_variation_set = function() {
++		var t = $(this);
++		$('#add-new-variation-set').show().find('#new-variation-set-name').focus();
++		window.parent.wpsc_resize_iframe();
++	};
++
++	/**
++	 * Deselect or Select all children variations when variation set is ticked.
++	 * @since 3.8.8
++	 */
++	var event_toggle_checkboxes = function() {
++		var t = $(this), checked;
++
++		if (t.is(':checked')) {
++			checked = true;
++		} else {
++			checked = false;
++		}
++
++		t.closest('li').find('.children input:checkbox').each(function(){
++			this.checked = checked;
++		});
++
++		if (checked !== t.closest('li').hasClass('expanded'))
++			t.parent().siblings('.expand').trigger('click');
++	};
++
++	/**
++	 * Show children variant checkboxes when the triangle is clicked.
++	 * @since 3.8.8
++	 */
++	var event_toggle_children = function() {
++		var t = $(this);
++		t.siblings('ul').slideToggle(150);
++		t.closest('li').toggleClass('expanded');
++		return false;
++	};
++
++	/**
++	 * Show the update variation button.
++	 * @since 3.8.8
++	 */
++	var event_display_apply_variations = function() {
++		$('.update-variations').fadeIn(150);
++	};
++
++	/**
++	 * Deselect the variation set if none of its variants are selected.
++	 * Or select the variation set when at least one of its variants is selected.
++	 * @since 3.8.8
++	 */
++	var event_toggle_parent = function() {
++		var t = $(this),
++			parent = t.closest('.children').parent();
++			parent_checkbox = parent.find('.variation-set'),
++			checked = this.checked;
++
++		if (this.checked) {
++			parent_checkbox[0].checked = true;
++		} else if (parent.find('.children input:checked').size() == 0) {
++			parent_checkbox[0].checked = false;
++			parent.find('.expand').trigger('click');
++		}
++	};
++})(jQuery);
+\ No newline at end of file
+diff --git wpsc-admin/js/set-post-thumbnail.js wpsc-admin/js/set-post-thumbnail.js
+new file mode 100644
+index 0000000..0e12c06
+--- /dev/null
++++ wpsc-admin/js/set-post-thumbnail.js
+@@ -0,0 +1,28 @@
++function WPSetAsThumbnail(id, nonce){
++	var $link = jQuery('a#wp-post-thumbnail-' + id);
++
++	$link.text( WPSC_Set_Post_Thumbnail.saving );
++	jQuery.post(
++		ajaxurl,
++		{
++			action       :"set_variation_product_thumbnail",
++			post_id      : post_id,
++			thumbnail_id : id,
++			'nonce'      : nonce,
++			cookie       : encodeURIComponent(document.cookie)
++		},
++		function(response){
++			var win = window.dialogArguments || opener || parent || top;
++			$link.text( WPSC_Set_Post_Thumbnail.link_text );
++			if ( ! response.success ) {
++				alert( WPSC_Set_Post_Thumbnail.error );
++			} else {
++				jQuery('a.wp-post-thumbnail').show();
++				$link.text( WPSC_Set_Post_Thumbnail.done );
++				$link.fadeOut( 2000 );
++				win.wpsc_set_variation_product_thumbnail(post_id, response.src);
++			}
++		},
++		'json'
++	);
++}
+diff --git wpsc-admin/js/variations.js wpsc-admin/js/variations.js
+index 44d9c0a..b5c4aa6 100755
+--- wpsc-admin/js/variations.js
++++ wpsc-admin/js/variations.js
+@@ -1,30 +1,43 @@
+-(function($){
+-	var new_variation_set_count = 0;
+-
+-	$(function(){
+-		var table = $('body.edit-tags-php .wp-list-table');
+-		table.find('tbody tr').each(function(){
+-			var t = $(this),
+-				id = t.attr('id').replace(/[^0-9]+/g, '');
+-			t.data('level', WPSC_Term_List_Levels[id]);
+-			t.data('id', id);
+-		});
+-
+-		table.wpsc_sortable_table({
+-			stop : variation_sort
+-		});
+-
+-		$('.variation_checkboxes').delegate('.variation-set', 'click', event_toggle_checkboxes).
+-		                           delegate('a.expand', 'click', event_toggle_children).
+-		                           delegate('.selectit input:checkbox', 'click', event_display_apply_variations).
+-		                           delegate('.children input:checkbox', 'click', event_toggle_parent);
++var wpsc_resize_iframe = function() {
++	var iframe = jQuery('#wpsc_product_variation_forms iframe')[0];
++	var i_document = iframe.contentDocument;
++	var i_document_element = i_document.documentElement;
++
++	iframe.style.height = '';
++
++	// getting true height of iframes in different browsers is a tricky business
++	var content_height = Math.max(
++		i_document.body.scrollHeight,
++		i_document.body.offsetHeight,
++		i_document.body.clientHeight,
++		i_document_element.scrollHeight,
++		i_document_element.offsetHeight,
++		i_document_element.clientHeight
++	);
++
++	iframe.style.height = content_height + 'px';
++};
++
++var wpsc_display_thickbox = function(title, url) {
++	tb_show(WPSC_Variations.thickbox_title.replace('%s', title), url);
++};
++
++var wpsc_set_variation_product_thumbnail = function(id, src) {
++	var iframe = jQuery('#wpsc_product_variation_forms iframe');
++	iframe.contents().find('#wpsc-variation-thumbnail-' + id).attr('src', src);
++};
++
++(function($) {
++	var table = $('body.edit-tags-php .wp-list-table');
++	table.find('tbody tr').each(function(){
++		var t = $(this),
++			id = t.attr('id').replace(/[^0-9]+/g, '');
++		t.data('level', WPSC_Term_List_Levels[id]);
++		t.data('id', id);
++	});
+ 
+-		$('a.update_variations_action').bind('click', event_apply_variations);
+-		$('a.add_variation_set_action').bind('click', event_add_new_variation_set);
+-		$('#add-new-variation-set .button').bind('click', event_variation_set_add);
+-		$('#add-new-variation-set input[type="text"]').bind('keypress', event_variation_set_inputs_keypress).
+-		                                               bind('focus', event_variation_set_inputs_focus).
+-		                                               bind('blur', event_variation_set_inputs_blur);
++	table.wpsc_sortable_table({
++		stop : variation_sort
+ 	});
+ 
+ 	/**
+@@ -41,208 +54,5 @@
+ 			parent_id: 0
+ 		};
+ 		jQuery.post(ajaxurl, data);
+-	}
+-
+-	/**
+-	 * Save new variation set using AJAX
+-	 * @since 3.8.8
+-	 */
+-	var event_variation_set_add = function() {
+-		var form = $('#add-new-variation-set');
+-
+-		form.find('.error').removeClass('error');
+-
+-		form.find('input[type="text"]').each(function(){
+-			var t = $(this);
+-			if (t.val() == '') {
+-				t.parent().addClass('error');
+-			}
+-		});
+-
+-		if (form.find('.error').size() === 0) {
+-			var spinner = $(this).siblings('.ajax-feedback'),
+-				post_data = {
+-					action        : 'add_variation_set',
+-					variation_set : $('#new-variation-set-name').val(),
+-					variants      : $('#new-variants').val(),
+-					post_id       : $('input[name="post_ID"]').val(),
+-					nonce         : WPSC_Variations.add_variation_set_nonce
+-				},
+-				ajax_callback = function(response) {
+-					var checklist, color, set_id, existing_set, content;
+-					if (response.is_successful) {
+-						checklist = $('.variation_checkboxes');
+-						content = $(response.obj.content);
+-						set_id = content.attr('id');
+-						existing_set = checklist.find('#' + set_id);
+-						if (existing_set.size() > 0) {
+-							existing_set.find('.children').append(content.find('.children .ajax'));
+-						} else {
+-							checklist.append(content);
+-						}
+-
+-						color = checklist.find('li').css('backgroundColor') || '#FFFFFF';
+-						checklist.find('.ajax').
+-							animate({ backgroundColor: '#FFFF33' }, 'fast').
+-							animate({ backgroundColor: color }, 'fast', function(){
+-								$(this).css('backgroundColor', 'transparent');
+-							}).
+-							removeClass('ajax');
+-					} else {
+-						alert(response.error.messages.join("\n"));
+-					}
+-					form.hide().find('input:text').val('');
+-					form.find('label').show().css('opacity', '1');
+-					spinner.toggleClass('ajax-feedback-active');
+-				};
+-
+-			spinner.toggleClass('ajax-feedback-active');
+-			$.wpsc_post(post_data, ajax_callback);
+-
+-		}
+-
+-		return false;
+-	};
+-
+-	/**
+-	 * Dim the new variation set inputs' labels when focused.
+-	 * @since 3.8.8
+-	 */
+-	var event_variation_set_inputs_focus = function() {
+-		$(this).siblings('label').animate({opacity:0.5}, 150);
+-	};
+-
+-	/**
+-	 * Restore opacity to the "new variation set" inputs' labels when blurred.
+-	 * @since 3.8.8
+-	 */
+-	var event_variation_set_inputs_blur = function() {
+-		var t = $(this);
+-		if (t.val() == '') {
+-			t.siblings('label').show().animate({opacity:1}, 150);
+-		}
+-	};
+-
+-	/**
+-	 * Remove class "error" when something is typed into the new variation set textboxes
+-	 * @since 3.8.8
+-	 */
+-	var event_variation_set_inputs_keypress = function(e) {
+-		var code = e.keyCode ? e.keyCode : e.which;
+-		if (code == 13) {
+-			$('#add-new-variation-set .button').trigger('click');
+-			e.preventDefault();
+-		} else {
+-			$(this).siblings('label').hide().removeClass('error');
+-		}
+-	};
+-
+-	/**
+-	 * Show the Add Variation Set form and focus on the first text field
+-	 * @since 3.8.8
+-	 */
+-	var event_add_new_variation_set = function() {
+-		var t = $(this);
+-		$('#add-new-variation-set').show().find('#new-variation-set-name').focus();
+-	};
+-
+-	/**
+-	 * Save variation combinations via AJAX
+-	 * @since 3.8.8
+-	 */
+-	var event_apply_variations = function() {
+-		var t = $(this),
+-			spinner = t.siblings('.ajax-feedback'),
+-			boxes = $('.variation_checkboxes input:checked'),
+-			values = [],
+-			post_data = {
+-				action                 : 'update_variations',
+-				description            : $('#content_ifr').contents().find('body').html(),
+-				additional_description : $('textarea#additional_description').text(),
+-				name                   : $('input#title').val(),
+-				product_id             : $('input#post_ID').val(),
+-				nonce                  : WPSC_Variations.update_variations_nonce
+-			},
+-			ajax_callback = function(response){
+-				spinner.toggleClass('ajax-feedback-active');
+-
+-				if (! response.is_successful) {
+-					alert(response.error.messages.join("\n"));
+-					return;
+-				}
+-
+-				$('div#wpsc_product_variation_forms table.widefat tbody').html(response.obj.content);
+-			};
+-
+-		boxes.each(function(){
+-			var t = $(this);
+-			post_data[t.attr('name')] = t.val();
+-		});
+-
+-		post_data.edit_var_val = values;
+-		spinner.toggleClass('ajax-feedback-active');
+-
+-		$.wpsc_post(post_data, ajax_callback);
+-
+-		return false;
+-	};
+-
+-	/**
+-	 * Deselect or Select all children variations when variation set is ticked.
+-	 * @since 3.8.8
+-	 */
+-	var event_toggle_checkboxes = function() {
+-		var t = $(this), checked;
+-
+-		if (t.is(':checked')) {
+-			checked = true;
+-		} else {
+-			checked = false;
+-		}
+-
+-		t.closest('li').find('.children input:checkbox').each(function(){
+-			this.checked = checked;
+-		});
+-
+-		if (checked !== t.closest('li').hasClass('expanded'))
+-			t.parent().siblings('.expand').trigger('click');
+-	};
+-
+-	/**
+-	 * Show children variant checkboxes when the triangle is clicked.
+-	 * @since 3.8.8
+-	 */
+-	var event_toggle_children = function() {
+-		var t = $(this);
+-		t.siblings('ul').slideToggle(150);
+-		t.closest('li').toggleClass('expanded');
+-		return false;
+-	};
+-
+-	/**
+-	 * Show the update variation button.
+-	 * @since 3.8.8
+-	 */
+-	var event_display_apply_variations = function() {
+-		$('.update-variations').fadeIn(150);
+-	};
+-
+-	/**
+-	 * Deselect the variation set if none of its variants are selected.
+-	 * Or select the variation set when at least one of its variants is selected.
+-	 * @since 3.8.8
+-	 */
+-	var event_toggle_parent = function() {
+-		var t = $(this),
+-			parent = t.closest('.children').parent();
+-			parent_checkbox = parent.find('.variation-set'),
+-			checked = this.checked;
+-
+-		if (this.checked) {
+-			parent_checkbox[0].checked = true;
+-		} else if (parent.find('.children input:checked').size() == 0) {
+-			parent_checkbox[0].checked = false;
+-			parent.find('.expand').trigger('click');
+-		}
+ 	};
+ })(jQuery);
